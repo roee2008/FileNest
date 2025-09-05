@@ -787,7 +787,6 @@ class HomeView(ctk.CTkScrollableFrame):
             card = RepoCard(grid, r, "Remote server", on_open=lambda name=r: on_open_repo(name))
             card.grid(row=i//2, column=i%2, sticky="ew", padx=6, pady=6)
     
-
 class ExplorerView(ctk.CTkFrame):
     def __init__(self, master, backend: SocketBackend):
         super().__init__(master, fg_color=G_BG)
