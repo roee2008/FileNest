@@ -306,7 +306,7 @@ class LoginDialog(ctk.CTkToplevel):
             print(f"Error setting icon: {e}")
         # Configure window
         self.title("Login")
-        self.geometry("150x150")  # Increased height for confirm password
+        self.geometry("300x300")  # Increased height for confirm password
         self.resizable(False, False)
         self.configure(fg_color=G_BG)
 
@@ -563,8 +563,9 @@ class Explorer(ctk.CTkFrame):
 
         # FIX: include repo
         entries = self.backend.list_files(self.repo, self.path)
-        if entries[0]["name"].startswith("404"):
-            entries = None
+        # Check if the list is not empty before accessing its elements
+        if not entries:
+            pass # entries is already an empty list, which is handled below
         container = self._container()
         for w in container.winfo_children():
             w.destroy()
@@ -572,10 +573,11 @@ class Explorer(ctk.CTkFrame):
         if self.path:
             ctk.CTkButton(container, text="..", fg_color="transparent", hover_color="#0f172a",
                           anchor="w", command=self._go_up).pack(fill="x", padx=6, pady=(6, 0))
-        if entries is None: 
+        if not entries: 
             ctk.CTkLabel(container, text="(Empty)", text_color=G_SUBTLE).pack(pady=10)
+            return # Stop here if there are no entries
 
-        for e in entries:
+        for e in entries: # This loop will now only run if entries is not empty
             name = e["name"]
             text, ext = os.path.splitext(name)
             if len(name) >= max_length:

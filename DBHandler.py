@@ -60,21 +60,16 @@ class DBHandler(BaseDBHandler):
 
     def has_access(self, username, file_name):
         """Checks if a user has access to a file."""
-        return self._execute("""
-        SELECT f.id
-        FROM files f
-        LEFT JOIN file_access a ON f.id = a.fileId
-        WHERE (f.ownerHash = ? OR a.accessUser = ?) AND f.fileName = ?
-        """, (username, username, file_name)).fetchone() is not None
+        # Check if the user owns the file OR if their username is in the access list for that file.
+        # This is more robust than the previous LEFT JOIN approach.
+        query = """
+            SELECT 1 FROM files WHERE fileName = ? AND (ownerHash = ? OR id IN (
+                SELECT fileId FROM file_access WHERE accessUser = ?
+            ))
+        """
+        return self._execute(query, (file_name, username, username)).fetchone() is not None
 
 if __name__ == '__main__':
     db_handler = DBHandler()
-    
-    # Example usage:
-    # Clear tables for a clean run
-
-    # Insert some files
-    db_handler.insert_file("hi", "Admin", [])
-    db_handler.insert_file("g", "Admin", ["Roee"])
 
     db_handler.close()

@@ -5,6 +5,7 @@ import time
 import re
 from DBHandler import DBHandler
 from UserHandler import UserHandler
+from SaveHandler import SaveHandler, DiffCheck
 
 HOST = '127.0.0.1'
 PORT = 2122
@@ -22,14 +23,15 @@ def send_response(conn, message):
     conn.sendall(message)
 
 def have_access(username, path, fileDB):
-    if not os.path.exists(path):
-        return False
-    path = path.replace(os.sep, "/").split("/")
-    files = fileDB.get_user_files(username)
-    for names in files:
-        if names[1] == path[1]:
-            return True
-    return False
+    """
+    Checks if a user has access to the repository containing the given virtual path.
+    The repository is the first component of the path.
+    """
+    # Normalize the path and extract the repository name (the first part).
+    repo_name = path.replace("\\", "/").strip("/").split('/')[0]
+    if not repo_name:
+        return False # Cannot determine repository from path
+    return fileDB.has_access(username, repo_name)
 
 def list_files(path):
     if not os.path.exists(path):
@@ -87,27 +89,23 @@ def handle_register(conn, state, context, **kwargs):
 
 def handle_list(conn, state, context, **kwargs):
     """Handles listing files and repositories."""
-    fileDB = context['fileDB']
+    save_handler = context['saveHandler']
     username = state.get('name')
     arg = kwargs.get('arg')
 
     if not username:
         send_response(conn, b"403 You must be logged in to perform this action.\n")
         return
-
-    if not arg:
-        try:
-            files = fileDB.get_user_files(username)
-            repoList = [file[1] for file in files]
-            send_response(conn, b"200 OK\n" + "\n".join(repoList).encode() + b"\n")
-        except:
-            send_response(conn, b"404 No files found.\n")
+    
+    # The argument is the virtual path to list. If empty, it lists the root.
+    directory_path = arg if arg else ""
+    
+    # Use the SaveHandler to get the virtual directory listing
+    contents = save_handler.list_virtual_directory(directory_path)
+    if contents:
+        send_response(conn, b"200 OK\n" + "\n".join(contents).encode() + b"\n")
     else:
-        target_dir = os.path.join(BASE_DIR, arg)
-        if not have_access(username, target_dir, fileDB):
-            send_response(conn, b"403 Access denied.\n")
-        else:
-            send_response(conn, b"200 OK\n" + list_files(target_dir).encode() + b"\n")
+        send_response(conn, b"404 No files or directories found.\n")
 
 def handle_search(conn, state, context, **kwargs):
     """Handles searching for a file."""
@@ -120,13 +118,13 @@ def handle_search(conn, state, context, **kwargs):
         return
 
     if target_file_name:
-        found_files = search_by_name(target_file_name)
-        filtered_files = [file for file in found_files if have_access(username, "ftp_root/" + file.split('/')[0], fileDB)]
+        found_files = context['saveHandler'].search_files_by_name(target_file_name)
+        filtered_files = [file for file in found_files if have_access(username, file, fileDB)]
         if filtered_files:
-            response = "200 OK\n" + "\n".join(filtered_files)
+            response = b"200 OK\n" + "\n".join(filtered_files).encode()
         else:
-            response = "404 No files found."
-        send_response(conn, response.encode())
+            response = b"404 No files found."
+        send_response(conn, response)
     else:
         send_response(conn, b"400 Bad Request: Missing filename. Usage: SEARCH <filename>\n")
 
@@ -135,69 +133,73 @@ def handle_get(conn, state, context, **kwargs):
     fileDB = context['fileDB']
     username = state.get('name')
     arg = kwargs.get('arg')
-    target_dir = os.path.join(BASE_DIR, arg)
 
     if not username:
         send_response(conn, b"403 You must be logged in to perform this action.\n")
         return
 
-    if not have_access(username, target_dir, fileDB):
+    if not have_access(username, arg, fileDB):
         send_response(conn, b"403 Access denied.\n")
     else:
-        path = os.path.join(BASE_DIR, arg)
-        if os.path.exists(path) and os.path.isfile(path):
-            send_response(conn, b"200 OK\n")
-            with open(path, "rb") as f:
-                send_response(conn, f.read())
+        save_handler = context['saveHandler']
+        latest_version = save_handler.get_latest_version(arg)
+
+        if latest_version == 0:
+            send_response(conn, b"404 File not found in version control.\n")
+            return
+
+        # Reconstruct the file at its latest version
+        content = save_handler.get_file_at_version(arg, latest_version) # Returns bytes
+
+        if content is not None:
+            send_response(conn, b"200 OK\n" + content)
         else:
-            send_response(conn, b"404 File not found.\n")
+            send_response(conn, b"500 Could not reconstruct file.\n")
 
 def handle_getdir(conn, state, context, **kwargs):
     """Handles retrieving a directory."""
     fileDB = context['fileDB']
+    save_handler = context['saveHandler']
     username = state.get('name')
     arg = kwargs.get('arg')
-    target_dir = os.path.join(BASE_DIR, arg)
 
     if not username:
         send_response(conn, b"403 You must be logged in to perform this action.\n")
         return
 
-    if not have_access(username, target_dir, fileDB):
+    if not have_access(username, arg, fileDB):
         send_response(conn, b"403 Access denied.\n")
     else:
-        if not os.path.exists(target_dir) or not os.path.isdir(target_dir):
-            send_response(conn, b"404 Directory not found.\n")
-            return
-
         send_response(conn, b"200 OK\n")
-        for root, dirs, files in os.walk(target_dir):
-            for file in files:
-                full_path = os.path.join(root, file)
-                rel_path = os.path.relpath(full_path, BASE_DIR).replace(os.sep, "/")
-                size = os.path.getsize(full_path)
-                send_response(conn, f"FILE {rel_path} {size}\n".encode())
-                with open(full_path, "rb") as f:
-                    send_response(conn, f.read())
+        # Find all files that are inside the requested virtual directory
+        all_repo_files = save_handler.search_files_by_name(arg)
+        files_in_dir = [f for f in all_repo_files if f.startswith(arg)]
+
+        for file_path in files_in_dir:
+            latest_version = save_handler.get_latest_version(file_path)
+            if latest_version > 0:
+                content = save_handler.get_file_at_version(file_path, latest_version)
+                if content:
+                    size = len(content)
+                    send_response(conn, f"FILE {file_path} {size}\n".encode())
+                    send_response(conn, content)
         send_response(conn, b"DONE\n")
 
 def handle_put(conn, state, context, **kwargs):
     """Handles uploading a file."""
     fileDB = context['fileDB']
+    save_handler = context['saveHandler']
     username = state.get('name')
     arg = kwargs.get('arg')
-    target_dir = os.path.dirname(os.path.join(BASE_DIR, arg))
-    target_dir = os.path.split(target_dir)[0]
 
     if not username:
         send_response(conn, b"403 You must be logged in to perform this action.\n")
         return
 
-    if not have_access(username, target_dir, fileDB):
+    # Check access based on the virtual path argument
+    if not have_access(username, arg, fileDB):
         send_response(conn, b"403 Access denied.\n")
     else:
-        path = os.path.join(BASE_DIR, arg)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
         send_response(conn, b"200 OK: Send file data, end with EOF marker '<EOF>'\n")
         file_data = b""
         while True:
@@ -205,32 +207,57 @@ def handle_put(conn, state, context, **kwargs):
             if b"<EOF>" in chunk:
                 file_data += chunk.replace(b"<EOF>", b"")
                 break
+            if not chunk:
+                break
             file_data += chunk
-        with open(path, "wb") as f:
-            f.write(file_data)
-        send_response(conn, b"200 File uploaded successfully.\n")
+        
+        latest_version = save_handler.get_latest_version(arg)
+        file_change = None
+
+        # Check for null byte to guess if it's a binary file
+        is_binary = b'\x00' in file_data
+
+        if latest_version == 0:
+            # New file: the "change" is the full content.
+            file_change = file_data
+        elif is_binary:
+            # Existing binary file: store the whole new file as the change.
+            file_change = file_data
+        else: # Existing text file: calculate a diff.
+            diff_checker = DiffCheck()
+            try:
+                old_content_bytes = save_handler.get_file_at_version(arg, latest_version)
+                old_content = old_content_bytes.decode('utf-8')
+                new_content = file_data.decode('utf-8')
+                file_change = diff_checker.check_diff(old_content, new_content)
+                if file_change:
+                    file_change = file_change.encode('utf-8')
+            except (UnicodeDecodeError, ValueError):
+                # If diffing fails for any reason, fall back to storing the full file.
+                file_change = file_data
+
+        if file_change is not None:
+            save_handler.save_file(arg, file_change)
+            send_response(conn, b"200 File uploaded successfully.\n")
+        else:
+            send_response(conn, b"200 File is already up to date.\n")
 
 def handle_mkdir(conn, state, context, **kwargs):
     """Handles creating a directory."""
     fileDB = context['fileDB']
     username = state.get('name')
     arg = kwargs.get('arg')
-    target_dir = os.path.join(BASE_DIR, arg)
-    target_dir = os.path.split(target_dir)[0]
 
     if not username:
         send_response(conn, b"403 You must be logged in to perform this action.\n")
         return
 
-    if not have_access(username, target_dir, fileDB):
+    if not have_access(username, arg, fileDB):
         send_response(conn, b"403 Access denied.\n")
     else:
-        new_dir = os.path.join(BASE_DIR, arg)
-        try:
-            os.makedirs(new_dir, exist_ok=False)
-            send_response(conn, b"201 Directory created successfully.\n")
-        except FileExistsError:
-            send_response(conn, b"409 Directory already exists.\n")
+        # In a virtual system, a directory "exists" as soon as a file is in it.
+        # This command can simply return success.
+        send_response(conn, b"201 Directory will be created upon file upload.\n")
 
 def handle_getrepos(conn, state, context, **kwargs):
     """Handles getting user's repositories."""
@@ -378,7 +405,8 @@ def handle_client(conn, addr):
     client_state = {"name": None}
     server_context = {
         "fileDB": DBHandler(),
-        "userDB": UserHandler()
+        "userDB": UserHandler(),
+        "saveHandler": SaveHandler()
     }
 
     try:
@@ -393,6 +421,7 @@ def handle_client(conn, addr):
         conn.close()
         server_context['fileDB'].close()
         server_context['userDB'].close()
+        server_context['saveHandler'].close()
         print(f"[-] {addr} disconnected")
 def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
