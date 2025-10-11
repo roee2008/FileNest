@@ -246,6 +246,7 @@ def handle_mkdir(conn, state, context, **kwargs):
     """Handles creating a directory."""
     fileDB = context['fileDB']
     username = state.get('name')
+    save_handler = context['saveHandler']
     arg = kwargs.get('arg')
 
     if not username:
@@ -255,8 +256,7 @@ def handle_mkdir(conn, state, context, **kwargs):
     if not have_access(username, arg, fileDB):
         send_response(conn, b"403 Access denied.\n")
     else:
-        # In a virtual system, a directory "exists" as soon as a file is in it.
-        # This command can simply return success.
+        save_handler.save_file(arg, "")
         send_response(conn, b"201 Directory will be created upon file upload.\n")
 
 def handle_getrepos(conn, state, context, **kwargs):
@@ -423,6 +423,7 @@ def handle_client(conn, addr):
         server_context['userDB'].close()
         server_context['saveHandler'].close()
         print(f"[-] {addr} disconnected")
+
 def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((HOST, PORT))

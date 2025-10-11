@@ -592,12 +592,8 @@ class Explorer(ctk.CTkFrame):
             is_dir = bool(e["is_dir"])
 
             # Add a context menu or double-click to try opening as file if it's marked as directory
-            if is_dir:
-                # Check if it might be a file (no obvious directory indicators)
-                if "." not in name and len(name) < 20:  # Short name without dots might be a file
-                    label = "📁❓ " + name  # Question mark indicates uncertainty
-                else:
-                    label = "📁 " + name
+            if "." not in name:
+                label = "📁 " + name
             else:
                 label = "📄 " + name
             
