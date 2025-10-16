@@ -6,22 +6,23 @@ from BaseDBHandler import BaseDBHandler
 
 
 class DiffCheck:
-    def check_diff(self, old_file, new_file):
-        with open(old_file, 'r', encoding='utf-8') as f:
-            old_file_content = f.readlines()
-        with open(new_file, 'r', encoding='utf-8') as f:
-            new_file_content = f.readlines()
+    def check_diff(self, old_content, new_content):
+        if old_content == new_content:
+            return None
+            
+        old_lines = old_content.splitlines()
+        new_lines = new_content.splitlines()
 
         diff = difflib.unified_diff(
-            old_file_content,
-            new_file_content,
-            fromfile='old_file',
-            tofile='new_file',
-            lineterm='',
+            old_lines,
+            new_lines,
+            fromfile='old_version',
+            tofile='new_version',
+            lineterm='\n',
         )
-
-        for line in diff:
-            print(line)
+        
+        diff_str = '\n'.join(diff)
+        return diff_str if diff_str else None
 
     def apply_patch(self, patch_content, old_content):
         """
@@ -29,42 +30,66 @@ class DiffCheck:
         Returns the new string content.
         Raises ValueError if the patch does not apply cleanly.
         """
+        if not patch_content.strip():
+            return old_content
+
         patch_lines = patch_content.splitlines()
         old_lines = old_content.splitlines()
         new_lines = []
         old_line_idx = 0
         
         patch_iter = iter(patch_lines)
-        # Skip header lines until '@@'
+        
+        # Find the first hunk
         for line in patch_iter:
             if line.startswith('@@'):
                 break
-        
-        # Process hunk lines
-        for line in patch_iter:
-            if not line: continue
-            
-            if line.startswith(' '):
-                # Context line
-                context_line = line[1:]
-                if old_line_idx < len(old_lines) and old_lines[old_line_idx] == context_line:
-                    new_lines.append(old_lines[old_line_idx])
-                    old_line_idx += 1
-                else:
-                    raise ValueError("Patch does not apply: context mismatch")
-            elif line.startswith('-'):
-                # Deletion line
-                deleted_line = line[1:]
-                if old_line_idx < len(old_lines) and old_lines[old_line_idx] == deleted_line:
-                    old_line_idx += 1
-                else:
-                    raise ValueError("Patch does not apply: deletion mismatch")
-            elif line.startswith('+'):
-                # Addition line
-                added_line = line[1:]
-                new_lines.append(added_line)
+        else:
+            return old_content # No hunks found
+
+        # Loop through all hunks in the patch
+        while True: 
+            hunk_header = line.strip()
+            match = re.match(r'@@ -(\d+),?\d* \+(\d+),?\d* @@', hunk_header)
+            if not match:
+                raise ValueError(f"Invalid hunk header: {hunk_header}")
                 
-        # Append any remaining lines from the old file
+            old_start_line = int(match.group(1)) - 1
+
+            # Add the lines from the original file that come before this hunk
+            if old_line_idx > old_start_line:
+                 raise ValueError("Patch hunks are not in order.")
+            new_lines.extend(old_lines[old_line_idx:old_start_line])
+            old_line_idx = old_start_line
+
+            # Process lines within the current hunk
+            for line in patch_iter:
+                if line.startswith('@@'): # Found the start of the next hunk
+                    break
+
+                if line.startswith(' '):
+                    context_line = line[1:]
+                    if old_line_idx < len(old_lines) and old_lines[old_line_idx] == context_line:
+                        new_lines.append(old_lines[old_line_idx])
+                        old_line_idx += 1
+                    else:
+                        expected = old_lines[old_line_idx] if old_line_idx < len(old_lines) else "EOF"
+                        raise ValueError(f"Patch does not apply: context mismatch. Expected '{expected}', got '{context_line}'")
+                elif line.startswith('-'):
+                    deleted_line = line[1:]
+                    if old_line_idx < len(old_lines) and old_lines[old_line_idx] == deleted_line:
+                        old_line_idx += 1
+                    else:
+                        expected = old_lines[old_line_idx] if old_line_idx < len(old_lines) else "EOF"
+                        raise ValueError(f"Patch does not apply: deletion mismatch. Expected '{expected}', got '{deleted_line}'")
+                elif line.startswith('+'):
+                    added_line = line[1:]
+                    new_lines.append(added_line)
+            else:
+                # No more lines in iterator, so no more hunks
+                break
+        
+        # Append the rest of the original file that comes after the last hunk
         if old_line_idx < len(old_lines):
             new_lines.extend(old_lines[old_line_idx:])
                 
@@ -105,8 +130,9 @@ class SaveHandler(BaseDBHandler):
 
         os.makedirs("Abyss", exist_ok=True)
         file_path = os.path.join("Abyss", id_hash)
-        with open(file_path, "a", encoding="utf-8") as f:
-            f.write(f"{file_change}\nV{next_version}\n")
+        with open(file_path, "ab") as f:
+            f.write(file_change)
+            f.write(f"\n--- FNSepV{next_version} ---\n".encode('utf-8'))
         self.conn.commit()
         return id_hash, next_version
 
@@ -121,32 +147,37 @@ class SaveHandler(BaseDBHandler):
         if not os.path.exists(history_file_path):
             return None  # No history found for this file
 
-        diff_checker = DiffCheck()
-
         with open(history_file_path, 'rb') as f:
             full_history = f.read() # Read as bytes
 
-        # Split the history file into chunks based on the version marker (e.g., "V1\n").
-        # The regex looks for "V" followed by digits, then a newline.
-        version_chunks = re.split(rb'\nV\d+\n', full_history)
-        # The last split item is usually an empty string if the file ends with the delimiter, so we remove it.
+        version_chunks = re.split(rb'\n--- FNSepV\d+ ---\n', full_history)
         patches = [chunk for chunk in version_chunks if chunk]
 
         if not patches or wanted_version > len(patches):
             return None  # Requested version does not exist or is out of bounds
 
-        # The first chunk is the initial full content of the file (version 1).
-        current_content = patches[0]
+        current_content = patches[0] # This is always the full V1 content (bytes)
 
-        # Apply subsequent patches up to the wanted version.
-        # The loop starts at 1 because we've already loaded the base content (patches[0]).
-        try:
-            for i in range(1, wanted_version):
-                current_content = diff_checker.apply_patch(patches[i].decode('utf-8'), current_content.decode('utf-8')).encode('utf-8')
-        except UnicodeDecodeError:
-            # If we hit a binary file that can't be decoded for patching, we can't reconstruct past this point.
-            # For simplicity, we'll just return the last valid state.
-            pass
+        # Apply subsequent patches up to the wanted version
+        diff_checker = DiffCheck()
+        for i in range(1, wanted_version):
+            patch_bytes = patches[i]
+            is_text_patch = False
+            if patch_bytes.startswith(b'--- old_version'):
+                try:
+                    patch_str = patch_bytes.decode('utf-8')
+                    base_str = current_content.decode('utf-8')
+                    # If both decode, we can attempt a patch
+                    current_content = diff_checker.apply_patch(patch_str, base_str).encode('utf-8')
+                    is_text_patch = True
+                except (UnicodeDecodeError, ValueError):
+                    # Decoding or patching failed, so it's not a valid text patch
+                    is_text_patch = False
+            
+            if not is_text_patch:
+                # If it wasn't a valid text patch (for any reason), treat as binary
+                current_content = patch_bytes
+            
         return current_content
 
     def list_virtual_directory(self, directory_path):

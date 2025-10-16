@@ -274,6 +274,8 @@ class SocketBackend:
             return
         try:
             self._send("QUIT")
+        except ConnectionAbortedError:
+            pass
         finally:
             try:
                 self.sock.close()
