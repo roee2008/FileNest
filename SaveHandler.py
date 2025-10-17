@@ -221,6 +221,23 @@ class SaveHandler(BaseDBHandler):
         row = self._execute("SELECT version FROM Saves WHERE id = ?", (id_hash,)).fetchone()
         return row[0] if row else 0
 
+    def get_all_versions(self, file_loc):
+        """Gets all version numbers for a given file location."""
+        file_id = hashlib.sha256(file_loc.encode()).hexdigest()
+        history_file_path = os.path.join("Abyss", file_id)
+
+        if not os.path.exists(history_file_path):
+            return []
+
+        with open(history_file_path, 'rb') as f:
+            full_history = f.read()
+
+        version_chunks = re.split(rb'\n--- FNSepV\d+ ---\n', full_history)
+        # The number of versions is the number of chunks, excluding the empty one at the end
+        num_versions = len([chunk for chunk in version_chunks if chunk])
+        print(f"Found {num_versions} versions for {file_loc}")
+        return list(range(1, num_versions + 1))
+
 if __name__ == '__main__':
     db_handler = SaveHandler()
     

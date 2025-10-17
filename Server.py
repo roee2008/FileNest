@@ -133,23 +133,35 @@ def handle_get(conn, state, context, **kwargs):
     fileDB = context['fileDB']
     username = state.get('name')
     arg = kwargs.get('arg')
+    # arg is a single string, potentially containing path and version
+    parts = arg.split(' ', 1)
+    file_path = parts[0]
+    version_str = parts[1] if len(parts) > 1 else None
 
     if not username:
         send_response(conn, b"403 You must be logged in to perform this action.\n")
         return
 
-    if not have_access(username, arg, fileDB):
+    if not have_access(username, file_path, fileDB):
         send_response(conn, b"403 Access denied.\n")
     else:
         save_handler = context['saveHandler']
-        latest_version = save_handler.get_latest_version(arg)
+        
+        if version_str:
+            try:
+                version = int(version_str)
+            except ValueError:
+                send_response(conn, b"400 Invalid version number.\n")
+                return
+        else:
+            version = save_handler.get_latest_version(file_path)
 
-        if latest_version == 0:
+        if version == 0:
             send_response(conn, b"404 File not found in version control.\n")
             return
 
-        # Reconstruct the file at its latest version
-        content = save_handler.get_file_at_version(arg, latest_version) # Returns bytes
+        # Reconstruct the file at the specified or latest version
+        content = save_handler.get_file_at_version(file_path, version) # Returns bytes
 
         if content is not None:
             send_response(conn, b"200 OK\n" + content)
@@ -184,6 +196,26 @@ def handle_getdir(conn, state, context, **kwargs):
                     send_response(conn, f"FILE {file_path} {size}\n".encode())
                     send_response(conn, content)
         send_response(conn, b"DONE\n")
+
+def handle_getversions(conn, state, context, **kwargs):
+    """Handles retrieving all versions of a file."""
+    fileDB = context['fileDB']
+    username = state.get('name')
+    arg = kwargs.get('arg')
+
+    if not username:
+        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        return
+
+    if not have_access(username, arg, fileDB):
+        send_response(conn, b"403 Access denied.\n")
+    else:
+        save_handler = context['saveHandler']
+        versions = save_handler.get_all_versions(arg)
+        if versions:
+            send_response(conn, b"200 OK\n" + ",".join(map(str, versions)).encode() + b"\n")
+        else:
+            send_response(conn, b"404 No versions found for this file.\n")
 
 def handle_put(conn, state, context, **kwargs):
     """Handles uploading a file."""
@@ -256,7 +288,7 @@ def handle_mkdir(conn, state, context, **kwargs):
     if not have_access(username, arg, fileDB):
         send_response(conn, b"403 Access denied.\n")
     else:
-        save_handler.save_file(arg, "")
+        save_handler.save_file(arg, "".encode('utf-8'))
         send_response(conn, b"201 Directory will be created upon file upload.\n")
 
 def handle_getrepos(conn, state, context, **kwargs):
@@ -329,13 +361,19 @@ command_handlers = {
         "handler": handle_get,
         "args": ["arg"],
         "separator": None,
-        "description": "Downloads a file. Usage: GET <file_path>"
+        "description": "Downloads a file. Usage: GET <file_path> [version]"
     },
     "GETDIR": {
         "handler": handle_getdir,
         "args": ["arg"],
         "separator": None,
         "description": "Downloads a directory. Usage: GETDIR <dir_path>"
+    },
+    "GETVERSIONS": {
+        "handler": handle_getversions,
+        "args": ["arg"],
+        "separator": None,
+        "description": "Gets all versions of a file. Usage: GETVERSIONS <file_path>"
     },
     "PUT": {
         "handler": handle_put,

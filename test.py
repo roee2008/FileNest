@@ -158,8 +158,10 @@ class SocketBackend:
             return items
         return []
 
-    def get_file(self, repo: str, path: str) -> str:
+    def get_file(self, repo: str, path: str, version: str = None) -> str:
         full_path = os.path.join(repo, path).replace("\\", "/")
+        if version:
+            full_path = f"{full_path} {version}"
         self._send(f"GET {full_path}")
         data = self._recv_all()
         if data.startswith("200 OK"):
@@ -176,8 +178,10 @@ class SocketBackend:
             return response.startswith("200")
         return False
 
-    def get_file_bytes(self, repo: str, path: str) -> t.Optional[bytes]:
+    def get_file_bytes(self, repo: str, path: str, version: str = None) -> t.Optional[bytes]:
         full_path = os.path.join(repo, path).replace("\\", "/")
+        if version:
+            full_path = f"{full_path} {version}"
         self._send(f"GET {full_path}")
         data = self._recv_all_bytes()
         if data.startswith(b"200 OK"):
@@ -288,6 +292,17 @@ class SocketBackend:
         self._send(f"ADDUSER {repo_name}_{username}")
         response = self._recv_all()
         return response.startswith("200")
+
+    def get_versions(self, repo: str, path: str) -> List[str]:
+        """Get available versions for a file."""
+        full_path = os.path.join(repo, path).replace("\\", "/")
+        self._send(f"GETVERSIONS {full_path}")
+        response = self._recv_all()
+        if response.startswith("200 OK"):
+            versions_line = response.split("\n")[1]
+            versions = versions_line.split(',')
+            return versions
+        return []
 
 # ---------- Utility ----------
 class Divider(ctk.CTkFrame):
@@ -428,6 +443,8 @@ class LoginDialog(ctk.CTkToplevel):
         """Return True if login was successful, False otherwise."""
         return self.result
 
+
+
 # ---------- Top Bar ----------
 class TopBar(ctk.CTkFrame):
     def __init__(self, master, on_search: t.Callable[[str], None], on_login: t.Callable[[], None]):
@@ -519,7 +536,7 @@ class RepoCard(ctk.CTkFrame):
 
 # ---------- Explorer (File Tree) ----------
 class Explorer(ctk.CTkFrame):
-    def __init__(self, master, backend, on_open_file: t.Callable[[str], None]):
+    def __init__(self, master, backend, on_open_file: t.Callable[[str, Optional[str]], None]):
         super().__init__(master, fg_color=G_BG)
         self.backend = backend
         self.repo: str = None
@@ -541,6 +558,23 @@ class Explorer(ctk.CTkFrame):
         self.list.pack(fill="both", expand=True, padx=8, pady=8)
         self._render_empty()
 
+    def _do_download(self, p, fname, isdir, version=None):
+        if isdir:
+            dest_dir = filedialog.askdirectory(title=f"Choose folder to save '{fname}'")
+            if not dest_dir:
+                return
+            self.backend.get_dir_to(f"{self.repo}/{p}".strip("/"), dest_dir)
+        else:
+            print(f"Downloading file: {p} version: {version}")
+            data = self.backend.get_file_bytes(self.repo, p, version)
+            if data is None:
+                messagebox.showwarning("Download", f"Cannot download: {p}")
+                return
+            dst = filedialog.asksaveasfilename(initialfile=fname)
+            if not dst:
+                return
+            with open(dst, "wb") as f:
+                f.write(data)
 
     def open_repo(self, repo: str,path: str = ""):
         self.repo = repo
@@ -558,7 +592,7 @@ class Explorer(ctk.CTkFrame):
         ctk.CTkLabel(container, text="Select a repository from the left.", text_color=G_SUBTLE).pack(pady=20)
 
     def refresh(self):
-        max_length: int = 17
+        max_length: int = 15
         if not self.repo:
             self._render_empty()
             return
@@ -603,7 +637,7 @@ class Explorer(ctk.CTkFrame):
                 if isdir:
                     return lambda: self._open_dir(p)
                 else:
-                    return lambda: self.on_open_file(p)
+                    return lambda: self.on_open_file(p, None)
             
             open_cmd = create_open_cmd()
 
@@ -621,7 +655,7 @@ class Explorer(ctk.CTkFrame):
                 def try_as_file(p=rel_path):
                     try:
                         # Try to open as file first
-                        self.on_open_file(p)
+                        self.on_open_file(p, None)
                     except Exception as e:
                         # If that fails, open as directory
                         print(f"Failed to open {p} as file, trying as directory: {e}")
@@ -630,28 +664,27 @@ class Explorer(ctk.CTkFrame):
                 # Bind right-click to try opening as file
                 file_btn.bind("<Button-3>", lambda e, p=rel_path: try_as_file(p))
 
-            def do_download(p=rel_path, fname=name, isdir=is_dir):
-                if isdir:
-                    dest_dir = filedialog.askdirectory(title=f"Choose folder to save '{name}'")
-                    if not dest_dir:
-                        return
-                    self.backend.get_dir_to(f"{self.repo}/{p}".strip("/"), dest_dir)
-                else:
-                    data = self.backend.get_file_bytes(self.repo, p)
-                    if data is None:
-                        messagebox.showwarning("Download", f"Cannot download: {p}")
-                        return
-                    dst = filedialog.asksaveasfilename(initialfile=fname)
-                    if not dst:
-                        return
-                    with open(dst, "wb") as f:
-                        f.write(data)
+            if not is_dir:
+                versions = self.backend.get_versions(self.repo, rel_path)
+                if versions:
+                    latest_version = versions[-1]
+                    
+                    # This variable will hold the selected version from the dropdown.
+                    # It's initialized to the latest version.
+                    selected_version_var = ctk.StringVar(value=latest_version)
 
-            ctk.CTkButton(
-                row, text="Download", width=100,
-                fg_color=G_ACCENT, hover_color="#1f6feb",
-                command=do_download
-            ).pack(side="right", padx=(6, 0))
+                    # Command for the dropdown to open the selected version.
+                    open_version_command = lambda chosen_version, p=rel_path: self.on_open_file(p, version=chosen_version)
+                    
+                    actions_frame = ctk.CTkFrame(row, fg_color="transparent")
+                    actions_frame.pack(side="right", padx=(6, 0))
+                    # The download button's command now reads the version from the shared variable.
+                    download_button = ctk.CTkButton(actions_frame, text="⬇", width=30, fg_color=G_ACCENT, hover_color="#1f6feb",
+                                  command=lambda p=rel_path, f=name, isd=is_dir, var=selected_version_var: self._do_download(p, f, isd, var.get()))
+                    download_button.pack(side="left")
+
+                    version_menu = ctk.CTkOptionMenu(actions_frame, values=versions, command=open_version_command, width=100, fg_color=G_ACCENT, variable=selected_version_var)
+                    version_menu.pack(side="left", padx=(2, 0))
 
         crumb = self.repo + (f" / {self.path}" if self.path else "")
         self.breadcrumb.configure(text=crumb)
@@ -693,22 +726,27 @@ class Editor(ctk.CTkFrame):
         # Bindings
         self.text.bind("<KeyRelease>", self._on_changed)
 
-    def open_file(self, path: str):
+    def open_file(self, path: str, version: str = None):
         repo = self.repo_getter()
         if not repo:
             messagebox.showwarning("Open", "No repository selected")
             return
         try:
-            content = self.backend.get_file(repo, path)
+            content = self.backend.get_file(repo, path, version=version)
             if content == "":
                 messagebox.showwarning("Open", f"Cannot open: {path}")
                 return
             # Create tab if needed
+            tab_text = path
+            if version:
+                tab_text = f"{path} (V{version})"
             if path not in self.tabs:
-                btn = ctk.CTkButton(self.tab_bar, text=path, fg_color=G_BG, hover_color="#0f172a",
+                btn = ctk.CTkButton(self.tab_bar, text=tab_text, fg_color=G_BG, hover_color="#0f172a",
                                      corner_radius=6, command=lambda p=path: self.open_file(p))
                 btn.pack(side="left", padx=4, pady=6)
                 self.tabs[path] = btn
+            else:
+                self.tabs[path].configure(text=tab_text)
             self._activate(path)
             self.text.delete("0.0", "end" )
             self.text.insert("0.0", content)
@@ -822,8 +860,8 @@ class ExplorerView(ctk.CTkFrame):
 
         Divider(self).pack(fill="x")
 
-    def _open_in_editor(self, path: str):
-        self.editor.open_file(path)
+    def _open_in_editor(self, path: str, version: str = None):
+        self.editor.open_file(path, version)
 
 class AccountView(ctk.CTkFrame):
     def __init__(self, master, backend: SocketBackend):

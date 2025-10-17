@@ -1,0 +1,57 @@
+a=0
+b=0
+x=0
+y=0
+dpad_down=0
+dpad_up=0
+dpad_left=0
+dpad_right=0
+bumper_l=0
+bumper_r=0
+stop=0
+restart=0
+right_y=0.010406494140625
+right_x=-0.004425048828125
+left_y=0.00408935546875
+left_x=-0.0035400390625
+trigger_l=0.0
+trigger_r=0
+auto_score=0
+auto_aim=0
+--- FNSepV1 ---
+--- old_version
+
++++ new_version
+
+@@ -17,4 +17,4 @@
+
+ trigger_l=0.0
+ trigger_r=0
+ auto_score=0
+-auto_aim=0
++auto_aim=1
+--- FNSepV2 ---
+--- old_version
+
++++ new_version
+
+@@ -17,4 +17,4 @@
+
+ trigger_l=0.0
+ trigger_r=0
+ auto_score=0
+-auto_aim=1
++auto_aim=44
+--- FNSepV3 ---
+--- old_version
+
++++ new_version
+
+@@ -17,4 +17,4 @@
+
+ trigger_l=0.0
+ trigger_r=0
+ auto_score=0
+-auto_aim=44
++auto_aim=1
+--- FNSepV4 ---
