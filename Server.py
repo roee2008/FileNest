@@ -90,18 +90,34 @@ def handle_register(conn, state, context, **kwargs):
 def handle_list(conn, state, context, **kwargs):
     """Handles listing files and repositories."""
     save_handler = context['saveHandler']
+    fileDB = context['fileDB']
     username = state.get('name')
     arg = kwargs.get('arg')
 
     if not username:
         send_response(conn, b"403 You must be logged in to perform this action.\n")
         return
-    
+
     # The argument is the virtual path to list. If empty, it lists the root.
     directory_path = arg if arg else ""
-    
-    # Use the SaveHandler to get the virtual directory listing
-    contents = save_handler.list_virtual_directory(directory_path)
+    print(f"Listing virtual directory: '{directory_path}' for user '{username}'")
+    # If listing a specific directory, check for access.
+    # An empty path means listing all accessible repos, which is handled by filtering later.
+    if directory_path and not have_access(username, directory_path, fileDB):
+        send_response(conn, b"403 Access denied.\n")
+        return
+    if directory_path == "":
+        # List all repositories the user has access to
+        user_files = fileDB.get_user_files(username, include_shared=True)
+        repo_names = set()
+        for file in user_files:
+            repo_name = file[1]  # fileName is at index 1
+            repo_names.add(repo_name)
+        contents = list(repo_names)
+    else:
+        # Use the SaveHandler to get the virtual directory listing
+        contents = save_handler.list_virtual_directory(directory_path)
+
     if contents:
         send_response(conn, b"200 OK\n" + "\n".join(contents).encode() + b"\n")
     else:
@@ -299,10 +315,9 @@ def handle_getrepos(conn, state, context, **kwargs):
     if not username:
         send_response(conn, b"403 You must be logged in to perform this action.\n")
         return
-
     repos = fileDB.get_user_files(username, include_shared=False)
     repo_names = [repo[1] for repo in repos]
-    send_response(conn, b"200 OK\n" + ",".join(repo_names).encode() + b"\n")
+    send_response(conn, b"200 OK\n" + "\n".join(repo_names).encode() + b"\n")
 
 def handle_adduser(conn, state, context, **kwargs):
     """Handles adding a user to a repo."""

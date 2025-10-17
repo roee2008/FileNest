@@ -646,7 +646,7 @@ class Explorer(ctk.CTkFrame):
 
             file_btn = ctk.CTkButton(
                 row, text=label, fg_color="transparent", hover_color="#0f172a",
-                anchor="w", command=open_cmd
+                anchor="w",width=130, command=open_cmd
             )
             file_btn.pack(side="left", fill="x", expand=True)
             
@@ -683,7 +683,7 @@ class Explorer(ctk.CTkFrame):
                                   command=lambda p=rel_path, f=name, isd=is_dir, var=selected_version_var: self._do_download(p, f, isd, var.get()))
                     download_button.pack(side="left")
 
-                    version_menu = ctk.CTkOptionMenu(actions_frame, values=versions, command=open_version_command, width=100, fg_color=G_ACCENT, variable=selected_version_var)
+                    version_menu = ctk.CTkOptionMenu(actions_frame, values=versions, command=open_version_command, width=10, fg_color=G_ACCENT, variable=selected_version_var)
                     version_menu.pack(side="left", padx=(2, 0))
 
         crumb = self.repo + (f" / {self.path}" if self.path else "")
