@@ -180,3 +180,4 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 test_patch_function.py
+dispatch_example.py
