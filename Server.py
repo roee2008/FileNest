@@ -6,6 +6,10 @@ import re
 from DBHandler import DBHandler
 from UserHandler import UserHandler
 from SaveHandler import SaveHandler, DiffCheck
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
 
 HOST = '127.0.0.1'
 PORT = 2122
@@ -18,9 +22,128 @@ def debug_print(message):
     if DEBUG:
         print(f"[DEBUG] {message}")
 
-def send_response(conn, message):
+def encrypt_message(message):
+    """
+    Example function showing how to work with PEM files.
+    
+    For SSL/TLS (most common use case):
+    - Use ssl library with certificate and key files
+    - Wrap your socket connection
+    
+    For encryption/signing:
+    - Use cryptography library to load RSA keys
+    - Encrypt or sign data
+    
+    Example code (uncomment to use):
+    """
+    # Option 1: Load private key for encryption
+    
+    with open("private_key.pem", "rb") as key_file:
+        private_key = serialization.load_pem_private_key(
+            key_file.read(),
+            password=None,  # or b"your_password" if key is encrypted
+            backend=default_backend()
+        )
+    
+    # Encrypt the message
+    message_bytes = message if isinstance(message, bytes) else message.encode()
+    encrypted = private_key.public_key().encrypt(
+        message_bytes,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    
+    return encrypted
+    
+    # For now, just return the message as-is (no encryption)
+
+def decrypt_message(encrypted_data):
+    """
+    Decrypt a message that was encrypted with the public key.
+    Uses the private key to decrypt.
+    """
+    with open("private_key.pem", "rb") as key_file:
+        private_key = serialization.load_pem_private_key(
+            key_file.read(),
+            password=None,  # or b"your_password" if key is encrypted
+            backend=default_backend()
+        )
+    
+    # Decrypt the message using the private key
+    decrypted = private_key.decrypt(
+        encrypted_data,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    
+    return decrypted
+
+def decrypt_aes_key_with_rsa(encrypted_aes_data):
+    """Decrypt AES key and IV that were encrypted with RSA"""
+    with open("private_key.pem", "rb") as key_file:
+        private_key = serialization.load_pem_private_key(
+            key_file.read(),
+            password=None,
+            backend=default_backend()
+        )
+    
+    # Decrypt the combined AES key and IV
+    decrypted_data = private_key.decrypt(
+        encrypted_aes_data,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    
+    # Split back into AES key (32 bytes) and IV (16 bytes)
+    aes_key = decrypted_data[:32]
+    aes_iv = decrypted_data[32:48]
+    
+    return aes_key, aes_iv
+
+def encrypt_with_aes(data: bytes, aes_key: bytes, aes_iv: bytes) -> bytes:
+    """Encrypt data using AES"""
+    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(aes_iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    
+    # Pad data to multiple of 16 bytes
+    padding_length = 16 - (len(data) % 16)
+    padded_data = data + bytes([padding_length] * padding_length)
+    
+    return encryptor.update(padded_data) + encryptor.finalize()
+
+def decrypt_with_aes(encrypted_data: bytes, aes_key: bytes, aes_iv: bytes) -> bytes:
+    """Decrypt data using AES"""
+    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(aes_iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    
+    padded_data = decryptor.update(encrypted_data) + decryptor.finalize()
+    
+    # Remove padding
+    padding_length = padded_data[-1]
+    return padded_data[:-padding_length]
+
+def send_response(conn, message, aes_key=None, aes_iv=None):
     debug_print(f"Sent: {message.strip()}")
-    conn.sendall(message)
+    if aes_key and aes_iv:
+        # Use AES encryption
+        if isinstance(message, bytes):
+            message_bytes = message
+        else:
+            message_bytes = message.encode()
+        encrypted_data = encrypt_with_aes(message_bytes, aes_key, aes_iv)
+        conn.sendall(encrypted_data)
+    else:
+        # Fallback to RSA encryption (for initial banner)
+        conn.sendall(encrypt_message(message))
 
 def have_access(username, path, fileDB):
     """
@@ -60,32 +183,32 @@ def handle_login(conn, state, context, **kwargs):
     username = kwargs.get('username')
     password = kwargs.get('password')
     if not is_valid_username(username):
-        send_response(conn, b"401 LOGIN FAILED: Invalid username format.\n")
+        send_response(conn, b"401 LOGIN FAILED: Invalid username format.\n", state.get("aes_key"), state.get("aes_iv"))
         return
     userDB = context['userDB']
     user_data = userDB.get_user(username)
 
     if user_data and password == user_data[1]:
-        send_response(conn, b"200 LOGIN SUCCESS\n")
+        send_response(conn, b"200 LOGIN SUCCESS\n", state.get("aes_key"), state.get("aes_iv"))
         state['name'] = username
     else:
-        send_response(conn, b"401 LOGIN FAILED: Invalid username or password.\n")
+        send_response(conn, b"401 LOGIN FAILED: Invalid username or password.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_register(conn, state, context, **kwargs):
     """Handles user registration."""
     username = kwargs.get('username')
     password = kwargs.get('password')
     if not is_valid_username(username):
-        send_response(conn, b"402 REGISTER FAILED: Invalid username format.\n")
+        send_response(conn, b"402 REGISTER FAILED: Invalid username format.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     userDB = context['userDB']
 
     if userDB.get_user(username) is not None:
-        send_response(conn, b"402 REGISTER FAILED: User already exists.\n")
+        send_response(conn, b"402 REGISTER FAILED: User already exists.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
         userDB.new_user(username, password)
-        send_response(conn, b"201 REGISTER SUCCESS\n")
+        send_response(conn, b"201 REGISTER SUCCESS\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_list(conn, state, context, **kwargs):
     """Handles listing files and repositories."""
@@ -95,7 +218,7 @@ def handle_list(conn, state, context, **kwargs):
     arg = kwargs.get('arg')
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     # The argument is the virtual path to list. If empty, it lists the root.
@@ -104,7 +227,7 @@ def handle_list(conn, state, context, **kwargs):
     # If listing a specific directory, check for access.
     # An empty path means listing all accessible repos, which is handled by filtering later.
     if directory_path and not have_access(username, directory_path, fileDB):
-        send_response(conn, b"403 Access denied.\n")
+        send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
         return
     if directory_path == "":
         # List all repositories the user has access to
@@ -119,9 +242,9 @@ def handle_list(conn, state, context, **kwargs):
         contents = save_handler.list_virtual_directory(directory_path)
 
     if contents:
-        send_response(conn, b"200 OK\n" + "\n".join(contents).encode() + b"\n")
+        send_response(conn, b"200 OK\n" + "\n".join(contents).encode() + b"\n", state.get("aes_key"), state.get("aes_iv"))
     else:
-        send_response(conn, b"404 No files or directories found.\n")
+        send_response(conn, b"404 No files or directories found.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_search(conn, state, context, **kwargs):
     """Handles searching for a file."""
@@ -130,7 +253,7 @@ def handle_search(conn, state, context, **kwargs):
     target_file_name = kwargs.get('target_file_name')
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     if target_file_name:
@@ -140,9 +263,9 @@ def handle_search(conn, state, context, **kwargs):
             response = b"200 OK\n" + "\n".join(filtered_files).encode()
         else:
             response = b"404 No files found."
-        send_response(conn, response)
+        send_response(conn, response, state.get("aes_key"), state.get("aes_iv"))
     else:
-        send_response(conn, b"400 Bad Request: Missing filename. Usage: SEARCH <filename>\n")
+        send_response(conn, b"400 Bad Request: Missing filename. Usage: SEARCH <filename>\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_get(conn, state, context, **kwargs):
     """Handles retrieving a file."""
@@ -155,11 +278,11 @@ def handle_get(conn, state, context, **kwargs):
     version_str = parts[1] if len(parts) > 1 else None
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     if not have_access(username, file_path, fileDB):
-        send_response(conn, b"403 Access denied.\n")
+        send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
         save_handler = context['saveHandler']
         
@@ -167,22 +290,22 @@ def handle_get(conn, state, context, **kwargs):
             try:
                 version = int(version_str)
             except ValueError:
-                send_response(conn, b"400 Invalid version number.\n")
+                send_response(conn, b"400 Invalid version number.\n", state.get("aes_key"), state.get("aes_iv"))
                 return
         else:
             version = save_handler.get_latest_version(file_path)
 
         if version == 0:
-            send_response(conn, b"404 File not found in version control.\n")
+            send_response(conn, b"404 File not found in version control.\n", state.get("aes_key"), state.get("aes_iv"))
             return
 
         # Reconstruct the file at the specified or latest version
         content = save_handler.get_file_at_version(file_path, version) # Returns bytes
 
         if content is not None:
-            send_response(conn, b"200 OK\n" + content)
+            send_response(conn, b"200 OK\n" + content, state.get("aes_key"), state.get("aes_iv"))
         else:
-            send_response(conn, b"500 Could not reconstruct file.\n")
+            send_response(conn, b"500 Could not reconstruct file.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_getdir(conn, state, context, **kwargs):
     """Handles retrieving a directory."""
@@ -192,13 +315,13 @@ def handle_getdir(conn, state, context, **kwargs):
     arg = kwargs.get('arg')
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     if not have_access(username, arg, fileDB):
-        send_response(conn, b"403 Access denied.\n")
+        send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
-        send_response(conn, b"200 OK\n")
+        send_response(conn, b"200 OK\n", state.get("aes_key"), state.get("aes_iv"))
         # Find all files that are inside the requested virtual directory
         all_repo_files = save_handler.search_files_by_name(arg)
         files_in_dir = [f for f in all_repo_files if f.startswith(arg)]
@@ -209,9 +332,9 @@ def handle_getdir(conn, state, context, **kwargs):
                 content = save_handler.get_file_at_version(file_path, latest_version)
                 if content:
                     size = len(content)
-                    send_response(conn, f"FILE {file_path} {size}\n".encode())
-                    send_response(conn, content)
-        send_response(conn, b"DONE\n")
+                    send_response(conn, f"FILE {file_path} {size}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
+                    send_response(conn, content, state.get("aes_key"), state.get("aes_iv"))
+        send_response(conn, b"DONE\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_getversions(conn, state, context, **kwargs):
     """Handles retrieving all versions of a file."""
@@ -220,18 +343,18 @@ def handle_getversions(conn, state, context, **kwargs):
     arg = kwargs.get('arg')
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     if not have_access(username, arg, fileDB):
-        send_response(conn, b"403 Access denied.\n")
+        send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
         save_handler = context['saveHandler']
         versions = save_handler.get_all_versions(arg)
         if versions:
-            send_response(conn, b"200 OK\n" + ",".join(map(str, versions)).encode() + b"\n")
+            send_response(conn, b"200 OK\n" + ",".join(map(str, versions)).encode() + b"\n", state.get("aes_key"), state.get("aes_iv"))
         else:
-            send_response(conn, b"404 No versions found for this file.\n")
+            send_response(conn, b"404 No versions found for this file.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_put(conn, state, context, **kwargs):
     """Handles uploading a file."""
@@ -241,14 +364,14 @@ def handle_put(conn, state, context, **kwargs):
     arg = kwargs.get('arg')
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     # Check access based on the virtual path argument
     if not have_access(username, arg, fileDB):
-        send_response(conn, b"403 Access denied.\n")
+        send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
-        send_response(conn, b"200 OK: Send file data, end with EOF marker '<EOF>'\n")
+        send_response(conn, b"200 OK: Send file data, end with EOF marker '<EOF>'\n", state.get("aes_key"), state.get("aes_iv"))
         file_data = b""
         while True:
             chunk = conn.recv(1024)
@@ -286,9 +409,9 @@ def handle_put(conn, state, context, **kwargs):
 
         if file_change is not None:
             save_handler.save_file(arg, file_change)
-            send_response(conn, b"200 File uploaded successfully.\n")
+            send_response(conn, b"200 File uploaded successfully.\n", state.get("aes_key"), state.get("aes_iv"))
         else:
-            send_response(conn, b"200 File is already up to date.\n")
+            send_response(conn, b"200 File is already up to date.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_mkdir(conn, state, context, **kwargs):
     """Handles creating a directory."""
@@ -298,14 +421,14 @@ def handle_mkdir(conn, state, context, **kwargs):
     arg = kwargs.get('arg')
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     if not have_access(username, arg, fileDB):
-        send_response(conn, b"403 Access denied.\n")
+        send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
         save_handler.save_file(arg, "".encode('utf-8'))
-        send_response(conn, b"201 Directory will be created upon file upload.\n")
+        send_response(conn, b"201 Directory will be created upon file upload.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_getrepos(conn, state, context, **kwargs):
     """Handles getting user's repositories."""
@@ -313,11 +436,11 @@ def handle_getrepos(conn, state, context, **kwargs):
     username = state.get('name')
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
     repos = fileDB.get_user_files(username, include_shared=False)
     repo_names = [repo[1] for repo in repos]
-    send_response(conn, b"200 OK\n" + "\n".join(repo_names).encode() + b"\n")
+    send_response(conn, b"200 OK\n" + "\n".join(repo_names).encode() + b"\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_adduser(conn, state, context, **kwargs):
     """Handles adding a user to a repo."""
@@ -327,7 +450,7 @@ def handle_adduser(conn, state, context, **kwargs):
     user_to_add = kwargs.get('user_to_add')
 
     if not username:
-        send_response(conn, b"403 You must be logged in to perform this action.\n")
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
         return
 
     files = fileDB.get_all_files()
@@ -338,13 +461,13 @@ def handle_adduser(conn, state, context, **kwargs):
             break
     if file_id != -1:
         fileDB.share_file_with_user(file_id, user_to_add)
-        send_response(conn, b"200 User added successfully.\n")
+        send_response(conn, b"200 User added successfully.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
-        send_response(conn, b"404 Repository not found.\n")
+        send_response(conn, b"404 Repository not found.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_quit(conn, state, context, **kwargs):
     """Handles disconnection."""
-    send_response(conn, b"221 Goodbye!\n")
+    send_response(conn, b"221 Goodbye!\n", state.get("aes_key"), state.get("aes_iv"))
     return "QUIT"
 
 command_handlers = {
@@ -429,7 +552,7 @@ def run_command(conn, state, context, command_string):
     cmd = cmd.upper()
 
     if cmd not in command_handlers:
-        send_response(conn, b"500 Unknown command.\n")
+        send_response(conn, b"500 Unknown command.\n", state.get("aes_key"), state.get("aes_iv"))
         return
     config = command_handlers[cmd]
 
@@ -437,7 +560,7 @@ def run_command(conn, state, context, command_string):
     expected_args = config["args"]
     if expected_args:
         if not arg_string and len(expected_args) > 0 and expected_args != ['arg']:
-            send_response(conn, f"400 Command '{cmd}' requires arguments. {config['description']}".encode())
+            send_response(conn, f"400 Command '{cmd}' requires arguments. {config['description']}".encode(), state.get("aes_key"), state.get("aes_iv"))
             return
         separator = config["separator"]
         if separator:
@@ -445,7 +568,7 @@ def run_command(conn, state, context, command_string):
         else:
             values = [arg_string]
         if len(values) != len(expected_args) and expected_args != ['arg']:
-            send_response(conn, f"400 Invalid arguments for '{cmd}'. {config['description']}".encode())
+            send_response(conn, f"400 Invalid arguments for '{cmd}'. {config['description']}".encode(), state.get("aes_key"), state.get("aes_iv"))
             return
         parsed_args = dict(zip(expected_args, values))
 
@@ -455,7 +578,7 @@ def run_command(conn, state, context, command_string):
 def handle_client(conn, addr):
     print(f"[+] Connected by {addr}")
     send_response(conn, b"220 Welcome Server Online\n")
-    client_state = {"name": None}
+    client_state = {"name": None, "aes_key": None, "aes_iv": None}
     server_context = {
         "fileDB": DBHandler(),
         "userDB": UserHandler(),
@@ -463,10 +586,31 @@ def handle_client(conn, addr):
     }
 
     try:
+        # First, receive the encrypted AES key
+        encrypted_aes_data = conn.recv(1024)  # RSA encrypted AES key
+        if encrypted_aes_data:
+            try:
+                aes_key, aes_iv = decrypt_aes_key_with_rsa(encrypted_aes_data)
+                client_state["aes_key"] = aes_key
+                client_state["aes_iv"] = aes_iv
+                debug_print("Successfully decrypted AES key from client")
+            except Exception as e:
+                debug_print(f"Failed to decrypt AES key: {e}")
+                return
+        
         while True:
-            data = conn.recv(1024).decode().strip()
-            if not data:
+            # Receive encrypted data
+            encrypted_data = conn.recv(4096)
+            if not encrypted_data:
                 break
+            
+            # Decrypt with AES
+            try:
+                decrypted_data = decrypt_with_aes(encrypted_data, client_state["aes_key"], client_state["aes_iv"])
+                data = decrypted_data.decode().strip()
+            except Exception as e:
+                debug_print(f"AES decryption failed: {e}")
+                continue
 
             if run_command(conn, client_state, server_context, data) == "QUIT":
                 break
@@ -489,4 +633,5 @@ def main():
             print(f"[ACTIVECONNECTIONS] {threading.active_count() - 1}")
 
 if __name__ == "__main__":
+    print(encrypt_message("Hello, world!"))
     main()

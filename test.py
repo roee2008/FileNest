@@ -5,6 +5,11 @@ import customtkinter as ctk
 from tkinter import messagebox, filedialog
 import socket
 from typing import List, Optional
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+import secrets
 
 # ---------- Color Theme ----------
 G_BG       = "#0d1117"  # page background
@@ -27,11 +32,92 @@ class SocketBackend:
         self.name: str = ""
         self.sock: Optional[socket.socket] = None
         self.debug = debug
+        self.aes_key: bytes = None
+        self.aes_iv: bytes = None
         self.connect()
 
     def debug_print(self, message):
         if self.debug:
             print(f"[DEBUG] {message}")
+    
+    def generate_aes_key(self):
+        """Generate a random AES key and IV"""
+        self.aes_key = secrets.token_bytes(32)  # 256-bit key
+        self.aes_iv = secrets.token_bytes(16)   # 128-bit IV
+        return self.aes_key, self.aes_iv
+    
+    def encrypt_with_aes(self, data: bytes) -> bytes:
+        """Encrypt data using AES"""
+        if not self.aes_key or not self.aes_iv:
+            raise ValueError("AES key not initialized")
+        
+        cipher = Cipher(algorithms.AES(self.aes_key), modes.CBC(self.aes_iv), backend=default_backend())
+        encryptor = cipher.encryptor()
+        
+        # Pad data to multiple of 16 bytes
+        padding_length = 16 - (len(data) % 16)
+        padded_data = data + bytes([padding_length] * padding_length)
+        
+        return encryptor.update(padded_data) + encryptor.finalize()
+    
+    def decrypt_with_aes(self, encrypted_data: bytes) -> bytes:
+        """Decrypt data using AES"""
+        if not self.aes_key or not self.aes_iv:
+            raise ValueError("AES key not initialized")
+        
+        cipher = Cipher(algorithms.AES(self.aes_key), modes.CBC(self.aes_iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        
+        padded_data = decryptor.update(encrypted_data) + decryptor.finalize()
+        
+        # Remove padding
+        padding_length = padded_data[-1]
+        return padded_data[:-padding_length]
+    
+    def encrypt_aes_key_with_rsa(self, aes_key: bytes, aes_iv: bytes) -> bytes:
+        """Encrypt AES key and IV with RSA public key"""
+        with open("public_key.pem", "rb") as key_file:
+            public_key = serialization.load_pem_public_key(
+                key_file.read(),
+                backend=default_backend()
+            )
+        
+        # Combine AES key and IV
+        combined_data = aes_key + aes_iv
+        
+        # Encrypt with RSA
+        encrypted = public_key.encrypt(
+            combined_data,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        return encrypted
+    
+    def decrypt_message(self, encrypted_data):
+        """
+        Decrypt a message that was encrypted with the public key.
+        The client needs the private key to decrypt server messages.
+        """
+        with open("private_key.pem", "rb") as key_file:
+            private_key = serialization.load_pem_private_key(
+                key_file.read(),
+                password=None,  # or b"your_password" if key is encrypted
+                backend=default_backend()
+            )
+        
+        # Decrypt the message using the private key
+        decrypted = private_key.decrypt(
+            encrypted_data,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        return decrypted
 
     def connect(self):
         if self.sock:
@@ -45,7 +131,17 @@ class SocketBackend:
         try:
             banner = self.sock.recv(1024).decode(errors="ignore")
             self.debug_print(f"Received: {banner.strip()}")
-        except Exception:
+            
+            # Generate AES key and send it encrypted with RSA
+            aes_key, aes_iv = self.generate_aes_key()
+            encrypted_aes_data = self.encrypt_aes_key_with_rsa(aes_key, aes_iv)
+            
+            # Send encrypted AES key
+            self.sock.sendall(encrypted_aes_data)
+            self.debug_print("Sent encrypted AES key to server")
+            
+        except Exception as e:
+            self.debug_print(f"Connection error: {e}")
             pass
 
     def login(self, username: str, password: str) -> bool:
@@ -84,7 +180,13 @@ class SocketBackend:
     def _send(self, text: str):
         assert self.sock, "Not connected"
         self.debug_print(f"Sent: {text}")
-        self.sock.sendall(text.encode() + b"\n")
+        if self.aes_key and self.aes_iv:
+            # Use AES encryption
+            encrypted_data = self.encrypt_with_aes(text.encode() + b"\n")
+            self.sock.sendall(encrypted_data)
+        else:
+            # Fallback to plain text (shouldn't happen after key exchange)
+            self.sock.sendall(text.encode() + b"\n")
 
     def _recv_all(self, timeout: float = 0.01) -> str:
         self.sock.settimeout(timeout)
@@ -99,7 +201,19 @@ class SocketBackend:
             pass
         finally:
             self.sock.settimeout(None)
-        decoded_data = data.decode(errors="ignore").strip()
+        
+        if self.aes_key and self.aes_iv and data:
+            # Use AES decryption
+            try:
+                decrypted_data = self.decrypt_with_aes(data)
+                decoded_data = decrypted_data.decode(errors="ignore").strip()
+            except Exception as e:
+                self.debug_print(f"AES decryption failed: {e}")
+                decoded_data = data.decode(errors="ignore").strip()
+        else:
+            # Fallback to plain text
+            decoded_data = data.decode(errors="ignore").strip()
+        
         self.debug_print(f"Received: {decoded_data}")
         return decoded_data
 
