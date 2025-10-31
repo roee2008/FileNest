@@ -441,6 +441,8 @@ class LoginDialog(ctk.CTkToplevel):
         self.resizable(False, False)
         self.configure(fg_color=G_BG)
 
+        # Register the validation function
+        self.vcmd = (self.register(self.on_validate), "%P")
         
         # Center the dialog
         self.transient(parent)
@@ -456,7 +458,9 @@ class LoginDialog(ctk.CTkToplevel):
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
-
+    def on_validate(self,text):
+        # Return True if text length ≤ 16
+        return len(text) <= 16
     def _create_widgets(self):
         # Title
         self.title_label = ctk.CTkLabel(self, text="Login", font=("Inter", 16, "bold"), text_color=G_TEXT)
@@ -466,14 +470,16 @@ class LoginDialog(ctk.CTkToplevel):
         self.username_label = ctk.CTkLabel(self, text="Username:", text_color=G_TEXT)
         self.username_label.pack(anchor="w", padx=20)
         
-        self.username_entry = ctk.CTkEntry(self, placeholder_text="Enter username", fg_color=G_PANEL, border_color=G_BORDER)
+        self.username_entry = ctk.CTkEntry(self,validate="key", 
+        validatecommand=self.vcmd, placeholder_text="Enter username", fg_color=G_PANEL, border_color=G_BORDER)
         self.username_entry.pack(fill="x", padx=20, pady=(0, 10))
         
         # Password
         self.password_label = ctk.CTkLabel(self, text="Password:", text_color=G_TEXT)
         self.password_label.pack(anchor="w", padx=20)
         
-        self.password_entry = ctk.CTkEntry(self, placeholder_text="Enter password", show="*", fg_color=G_PANEL, border_color=G_BORDER)
+        self.password_entry = ctk.CTkEntry(self,validate="key", 
+        validatecommand=self.vcmd, placeholder_text="Enter password", show="*", fg_color=G_PANEL, border_color=G_BORDER)
         self.password_entry.pack(fill="x", padx=20, pady=(0, 10))
         
         # Buttons

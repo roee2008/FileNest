@@ -19,3 +19,17 @@ trigger_r=0
 auto_score=0
 auto_aim=0
 --- FNSepV1 ---
+--- old_version
+
++++ new_version
+
+@@ -7,6 +7,7 @@
+
+ dpad_left=0
+ dpad_right=0
+ bumper_l=0
++dsd
+ bumper_r=0
+ stop=0
+ restart=0
+--- FNSepV2 ---

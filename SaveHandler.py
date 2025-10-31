@@ -150,7 +150,7 @@ class SaveHandler(BaseDBHandler):
         with open(history_file_path, 'rb') as f:
             full_history = f.read() # Read as bytes
 
-        version_chunks = re.split(rb'\n--- FNSepV\d+ ---\n', full_history)
+        version_chunks = re.split(rb'\r?\n--- FNSepV\d+ ---\r?\n', full_history)
         patches = [chunk for chunk in version_chunks if chunk]
 
         if not patches or wanted_version > len(patches):
@@ -232,7 +232,7 @@ class SaveHandler(BaseDBHandler):
         with open(history_file_path, 'rb') as f:
             full_history = f.read()
 
-        version_chunks = re.split(rb'\n--- FNSepV\d+ ---\n', full_history)
+        version_chunks = re.split(rb'\r?\n--- FNSepV\d+ ---\r?\n', full_history)
         # The number of versions is the number of chunks, excluding the empty one at the end
         num_versions = len([chunk for chunk in version_chunks if chunk])
         print(f"Found {num_versions} versions for {file_loc}")
