@@ -33,3 +33,15 @@ auto_aim=0
  stop=0
  restart=0
 --- FNSepV2 ---
+--- old_version
+
++++ new_version
+
+@@ -18,4 +18,4 @@
+
+ trigger_l=0.0
+ trigger_r=0
+ auto_score=0
+-auto_aim=0
++auto_aim=41
+--- FNSepV3 ---

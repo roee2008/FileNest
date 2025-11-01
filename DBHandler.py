@@ -21,12 +21,26 @@ class DBHandler(BaseDBHandler):
         )
         """)
 
+    def create_repository(self, repo_name, owner_username):
+        """Creates a new repository and assigns ownership."""
+        cursor = self._execute("INSERT INTO files (fileName, ownerHash) VALUES (?, ?)", (repo_name, owner_username))
+        repo_id = cursor.lastrowid
+        if repo_id:
+            self.share_file_with_user(repo_id, owner_username)
+        return repo_id
+
     def insert_file(self, file_name, owner_hash, access_users):
+        # This method is for inserting files within an existing repo, not creating a new repo.
+        # The 'files' table now represents repositories.
+        # This method might need to be re-evaluated or removed if 'files' table is solely for repos.
+        # For now, assuming it's still used for some internal file tracking within a repo context.
+        # If file_name is actually a repo_name, then owner_hash should be the owner.
+        # If access_users are provided, they are also added.
         cursor = self._execute("INSERT INTO files (fileName, ownerHash) VALUES (?, ?)", (file_name, owner_hash))
         file_id = cursor.lastrowid
         if access_users:
-            self._execute("INSERT INTO file_access (fileId, accessUser) VALUES (?, ?)",
-                                 [(file_id, user) for user in access_users])
+            for user in access_users:
+                self.share_file_with_user(file_id, user)
 
     def get_all_files(self):
         return self._execute("""

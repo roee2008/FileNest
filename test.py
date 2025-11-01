@@ -217,21 +217,6 @@ class SocketBackend:
         self.debug_print(f"Received: {decoded_data}")
         return decoded_data
 
-    def _recv_all_bytes(self, timeout: float = 0.01) -> bytes:
-        self.sock.settimeout(timeout)
-        data = b""
-        try:
-            while True:
-                chunk = self.sock.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-        except socket.timeout:
-            pass
-        finally:
-            self.sock.settimeout(None)
-        self.debug_print(f"Received {len(data)} bytes")
-        return data
 
     # --- high-level API for your UI ---
     def list_repos(self) -> List[str]:
@@ -248,7 +233,8 @@ class SocketBackend:
         raw = self._recv_all()
         if raw.startswith("200 OK"):
             if len(raw.split("\n")) > 1:
-                return raw.split("\n")[1].split(",")
+                print(raw)
+                return raw.split("\n")[1:]
         return []
 
     def list_files(self, repo: str, path: str = "") -> List[dict]:
@@ -406,6 +392,12 @@ class SocketBackend:
         self._send(f"ADDUSER {repo_name}_{username}")
         response = self._recv_all()
         return response.startswith("200")
+
+    def create_repo(self, repo_name: str) -> bool:
+        """Creates a new repository."""
+        self._send(f"CREATEREPO {repo_name}")
+        response = self._recv_all()
+        return response.startswith("201")
 
     def get_versions(self, repo: str, path: str) -> List[str]:
         """Get available versions for a file."""
@@ -852,21 +844,18 @@ class Editor(ctk.CTkFrame):
             messagebox.showwarning("Open", "No repository selected")
             return
         try:
-            content = self.backend.get_file(repo, path, version=version)
+            content = self.backend.get_file(repo, path, version)
             if content == "":
                 messagebox.showwarning("Open", f"Cannot open: {path}")
                 return
             # Create tab if needed
-            tab_text = path
-            if version:
-                tab_text = f"{path} (V{version})"
             if path not in self.tabs:
-                btn = ctk.CTkButton(self.tab_bar, text=tab_text, fg_color=G_BG, hover_color="#0f172a",
-                                     corner_radius=6, command=lambda p=path: self.open_file(p))
+                btn = ctk.CTkButton(self.tab_bar, text=path, fg_color=G_BG, hover_color="#0f172a",
+                                     corner_radius=6, command=lambda : self.open_file(path, version))
                 btn.pack(side="left", padx=4, pady=6)
                 self.tabs[path] = btn
             else:
-                self.tabs[path].configure(text=tab_text)
+                self.tabs[path].configure(text=path,command=lambda : self.open_file(path, version))
             self._activate(path)
             self.text.delete("0.0", "end" )
             self.text.insert("0.0", content)
@@ -879,7 +868,7 @@ class Editor(ctk.CTkFrame):
         for p, b in self.tabs.items():
             b.configure(fg_color=(G_ACCENT if p == path else G_BG))
 
-    def _on_changed(self, _event=None):
+    def _on_changed(self):
         if self.active_path:
             self.status.configure(text=f"Editing {self.active_path} – Unsaved changes…")
 
@@ -1032,18 +1021,42 @@ class AccountView(ctk.CTkFrame):
 
         ctk.CTkLabel(settings_frame, text="Account Actions", font=("Inter", 14, "bold")).grid(row=0, column=0, padx=12, pady=(12, 8), sticky="w")
 
+        # Create Repository Section
+        create_repo_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        create_repo_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 8))
+        create_repo_frame.grid_columnconfigure(0, weight=1)
+
+        self.repo_name_entry = ctk.CTkEntry(create_repo_frame, placeholder_text="New repository name")
+        self.repo_name_entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        self.create_repo_button = ctk.CTkButton(create_repo_frame, text="Create Repo", command=self.create_repository_action)
+        self.create_repo_button.grid(row=0, column=1, sticky="e")
+
         # Change Password
         ctk.CTkButton(settings_frame, text="Change Password", anchor="w", fg_color="transparent"
-                      , hover=False).grid(row=1, column=0, sticky="ew", padx=12, pady=4)
+                      , hover=False).grid(row=2, column=0, sticky="ew", padx=12, pady=4)
         
         # Logout
         ctk.CTkButton(settings_frame, text="Logout", anchor="w", fg_color="transparent"
-                      , hover=False).grid(row=2, column=0, sticky="ew", padx=12, pady=4)
+                      , hover=False).grid(row=3, column=0, sticky="ew", padx=12, pady=4)
 
         # Delete Account (with warning color)
         ctk.CTkButton(settings_frame, text="Delete Account", anchor="w", text_color="#f85149", fg_color="transparent"
-                      , hover=False).grid(row=3, column=0, sticky="ew", padx=12, pady=(4, 12))
+                      , hover=False).grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 12))
 
+
+    def create_repository_action(self):
+        repo_name = self.repo_name_entry.get().strip()
+        if not repo_name:
+            messagebox.showwarning("Input Error", "Please enter a repository name.")
+            return
+        
+        if self.backend.create_repo(repo_name):
+            messagebox.showinfo("Success", f"Repository '{repo_name}' created successfully.")
+            self.repo_name_entry.delete(0, "end")
+            self.refresh() # Refresh the list of owned repositories
+        else:
+            messagebox.showerror("Error", f"Failed to create repository '{repo_name}'. It might already exist or there was a server error.")
 
     def refresh(self):
         # Clear existing repos

@@ -1,7 +1,6 @@
 import socket
 import os
 import threading
-import time
 import re
 from DBHandler import DBHandler
 from UserHandler import UserHandler
@@ -23,20 +22,6 @@ def debug_print(message):
         print(f"[DEBUG] {message}")
 
 def encrypt_message(message):
-    """
-    Example function showing how to work with PEM files.
-    
-    For SSL/TLS (most common use case):
-    - Use ssl library with certificate and key files
-    - Wrap your socket connection
-    
-    For encryption/signing:
-    - Use cryptography library to load RSA keys
-    - Encrypt or sign data
-    
-    Example code (uncomment to use):
-    """
-    # Option 1: Load private key for encryption
     
     with open("private_key.pem", "rb") as key_file:
         private_key = serialization.load_pem_private_key(
@@ -132,7 +117,7 @@ def decrypt_with_aes(encrypted_data: bytes, aes_key: bytes, aes_iv: bytes) -> by
     return padded_data[:-padding_length]
 
 def send_response(conn, message, aes_key=None, aes_iv=None):
-    debug_print(f"Sent: {message.strip()}")
+    debug_print(f"Sent: {message.strip()[:50]}{'...' if len(message.strip()) > 50 else ''}")
     if aes_key and aes_iv:
         # Use AES encryption
         if isinstance(message, bytes):
@@ -465,6 +450,29 @@ def handle_adduser(conn, state, context, **kwargs):
     else:
         send_response(conn, b"404 Repository not found.\n", state.get("aes_key"), state.get("aes_iv"))
 
+def handle_createrepo(conn, state, context, **kwargs):
+    """Handles creating a new repository."""
+    fileDB = context['fileDB']
+    username = state.get('name')
+    repo_name = kwargs.get('repo_name')
+
+    if not username:
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    if not repo_name:
+        send_response(conn, b"400 Bad Request: Missing repository name. Usage: CREATEREPO <repo_name>\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    try:
+        repo_id = fileDB.create_repository(repo_name, username)
+        if repo_id:
+            send_response(conn, b"201 Repository created successfully.\n", state.get("aes_key"), state.get("aes_iv"))
+        else:
+            send_response(conn, b"500 Failed to create repository.\n", state.get("aes_key"), state.get("aes_iv"))
+    except Exception as e:
+        send_response(conn, f"500 Server error: {e}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
+
 def handle_quit(conn, state, context, **kwargs):
     """Handles disconnection."""
     send_response(conn, b"221 Goodbye!\n", state.get("aes_key"), state.get("aes_iv"))
@@ -536,6 +544,12 @@ command_handlers = {
         "args": ["repo_name", "user_to_add"],
         "separator": "_",
         "description": "Shares a repo. Usage: ADDUSER <repo_name>_<user_to_add>"
+    },
+    "CREATEREPO": {
+        "handler": handle_createrepo,
+        "args": ["repo_name"],
+        "separator": None,
+        "description": "Creates a new repository. Usage: CREATEREPO <repo_name>"
     },
     "QUIT": {
         "handler": handle_quit,
@@ -633,5 +647,4 @@ def main():
             print(f"[ACTIVECONNECTIONS] {threading.active_count() - 1}")
 
 if __name__ == "__main__":
-    print(encrypt_message("Hello, world!"))
     main()
