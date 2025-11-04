@@ -2,6 +2,7 @@ import socket
 import os
 import threading
 import re
+import struct
 from DBHandler import DBHandler
 from UserHandler import UserHandler
 from SaveHandler import SaveHandler, DiffCheck
@@ -125,6 +126,8 @@ def send_response(conn, message, aes_key=None, aes_iv=None):
         else:
             message_bytes = message.encode()
         encrypted_data = encrypt_with_aes(message_bytes, aes_key, aes_iv)
+        # Prefix with 4-byte length
+        conn.sendall(struct.pack('>I', len(encrypted_data)))
         conn.sendall(encrypted_data)
     else:
         # Fallback to RSA encryption (for initial banner)
@@ -258,7 +261,7 @@ def handle_get(conn, state, context, **kwargs):
     username = state.get('name')
     arg = kwargs.get('arg')
     # arg is a single string, potentially containing path and version
-    parts = arg.split(' ', 1)
+    parts = arg.split('  ', 1)
     file_path = parts[0]
     version_str = parts[1] if len(parts) > 1 else None
 
@@ -288,6 +291,7 @@ def handle_get(conn, state, context, **kwargs):
         content = save_handler.get_file_at_version(file_path, version) # Returns bytes
 
         if content is not None:
+            # The header is no longer needed here as the length of the whole message is sent by send_response
             send_response(conn, b"200 OK\n" + content, state.get("aes_key"), state.get("aes_iv"))
         else:
             send_response(conn, b"500 Could not reconstruct file.\n", state.get("aes_key"), state.get("aes_iv"))
@@ -613,8 +617,20 @@ def handle_client(conn, addr):
                 return
         
         while True:
-            # Receive encrypted data
-            encrypted_data = conn.recv(4096)
+            # Receive length-prefixed encrypted data
+            length_data = conn.recv(4)
+            if not length_data:
+                break
+            
+            msg_len = struct.unpack('>I', length_data)[0]
+            
+            encrypted_data = b""
+            while len(encrypted_data) < msg_len:
+                packet = conn.recv(msg_len - len(encrypted_data))
+                if not packet:
+                    break
+                encrypted_data += packet
+
             if not encrypted_data:
                 break
             

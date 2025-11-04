@@ -139,46 +139,70 @@ class SaveHandler(BaseDBHandler):
     def get_file_at_version(self, file_loc, wanted_version):
         """
         Reconstructs a file to a specific version by reading its history file
-        from the 'Abyss' directory and applying changes sequentially.
+        from the 'Abyss' directory and applying changes sequentially in a memory-efficient way.
         """
         file_id = hashlib.sha256(file_loc.encode()).hexdigest()
         history_file_path = os.path.join("Abyss", file_id)
 
         if not os.path.exists(history_file_path):
-            return None  # No history found for this file
+            return None
+
+        current_version = 0
+        current_content = b''
+        separator_pattern = re.compile(rb'\r?\n--- FNSepV(\d+) ---\r?\n')
 
         with open(history_file_path, 'rb') as f:
-            full_history = f.read() # Read as bytes
+            buffer = b''
+            while current_version < wanted_version:
+                chunk = f.read(8192)
+                if not chunk:
+                    break
+                buffer += chunk
+                
+                while True:
+                    match = separator_pattern.search(buffer)
+                    if not match:
+                        break
+                    
+                    version_data = buffer[:match.start()]
+                    version_num = int(match.group(1))
 
-        version_chunks = re.split(rb'\r?\n--- FNSepV\d+ ---\r?\n', full_history)
-        patches = [chunk for chunk in version_chunks if chunk]
+                    if version_num == 1:
+                        current_content = version_data
+                    else:
+                        # Apply patch or replace content
+                        diff_checker = DiffCheck()
+                        try:
+                            patch_str = version_data.decode('utf-8')
+                            base_str = current_content.decode('utf-8')
+                            current_content = diff_checker.apply_patch(patch_str, base_str).encode('utf-8')
+                        except (UnicodeDecodeError, ValueError):
+                            current_content = version_data # Treat as binary
 
-        if not patches or wanted_version > len(patches):
-            return None  # Requested version does not exist or is out of bounds
-
-        current_content = patches[0] # This is always the full V1 content (bytes)
-
-        # Apply subsequent patches up to the wanted version
-        diff_checker = DiffCheck()
-        for i in range(1, wanted_version):
-            patch_bytes = patches[i]
-            is_text_patch = False
-            if patch_bytes.startswith(b'--- old_version'):
+                    current_version = version_num
+                    if current_version == wanted_version:
+                        return current_content
+                    
+                    buffer = buffer[match.end():]
+        
+        # If the loop finishes, it means we've processed the whole file
+        # but might not have hit the last separator. The remaining buffer is the last version's content.
+        if buffer and current_version < wanted_version:
+             # This part handles the last chunk of the file that doesn't end with a separator
+            version_num = current_version + 1
+            if version_num == 1:
+                current_content = buffer
+            else:
+                diff_checker = DiffCheck()
                 try:
-                    patch_str = patch_bytes.decode('utf-8')
+                    patch_str = buffer.decode('utf-8')
                     base_str = current_content.decode('utf-8')
-                    # If both decode, we can attempt a patch
                     current_content = diff_checker.apply_patch(patch_str, base_str).encode('utf-8')
-                    is_text_patch = True
                 except (UnicodeDecodeError, ValueError):
-                    # Decoding or patching failed, so it's not a valid text patch
-                    is_text_patch = False
-            
-            if not is_text_patch:
-                # If it wasn't a valid text patch (for any reason), treat as binary
-                current_content = patch_bytes
-            
-        return current_content
+                    current_content = buffer
+            current_version = version_num
+
+        return current_content if current_version == wanted_version else None
 
     def list_virtual_directory(self, directory_path):
         """
@@ -222,20 +246,38 @@ class SaveHandler(BaseDBHandler):
         return row[0] if row else 0
 
     def get_all_versions(self, file_loc):
-        """Gets all version numbers for a given file location."""
+        """Gets all version numbers for a given file location in a memory-efficient way."""
         file_id = hashlib.sha256(file_loc.encode()).hexdigest()
         history_file_path = os.path.join("Abyss", file_id)
 
         if not os.path.exists(history_file_path):
             return []
 
-        with open(history_file_path, 'rb') as f:
-            full_history = f.read()
-
-        version_chunks = re.split(rb'\r?\n--- FNSepV\d+ ---\r?\n', full_history)
-        # The number of versions is the number of chunks, excluding the empty one at the end
-        num_versions = len([chunk for chunk in version_chunks if chunk])
-        print(f"Found {num_versions} versions for {file_loc}")
+        count = 0
+        separator_pattern = re.compile(rb'--- FNSepV\d+ ---')
+        try:
+            with open(history_file_path, 'rb') as f:
+                # Read the file in chunks to avoid loading it all into memory
+                buffer = f.read(8192)
+                while buffer:
+                    count += len(separator_pattern.findall(buffer))
+                    buffer = f.read(8192)
+            # The number of versions is the number of separators + 1, assuming the file is not empty.
+            # A more robust way is to count separators. If there's content, there's at least one version.
+            if os.path.getsize(history_file_path) > 0:
+                 # The number of versions is the number of separators found.
+                 # Let's adjust logic: each separator marks the END of a version.
+                 # So, the number of versions is the number of separators.
+                 pass # `count` is already the number of separators.
+            else:
+                return []
+        except IOError:
+            return []
+        
+        # The number of versions is the number of separators.
+        # But if the file doesn't end with a separator, the last version is not counted.
+        # Let's refine the logic.
+        num_versions = self.get_latest_version(file_loc)
         return list(range(1, num_versions + 1))
 
 if __name__ == '__main__':

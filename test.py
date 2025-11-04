@@ -1,9 +1,11 @@
 import os
 import hashlib
+import threading
 import typing as t
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
 import socket
+import struct
 from typing import List, Optional
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -183,26 +185,35 @@ class SocketBackend:
         if self.aes_key and self.aes_iv:
             # Use AES encryption
             encrypted_data = self.encrypt_with_aes(text.encode() + b"\n")
+            # Prefix with 4-byte length
+            self.sock.sendall(struct.pack('>I', len(encrypted_data)))
             self.sock.sendall(encrypted_data)
         else:
             # Fallback to plain text (shouldn't happen after key exchange)
             self.sock.sendall(text.encode() + b"\n")
+    def _recv_all_bytes(self) -> bytes:
+        # Read message length
+        length_data = self.sock.recv(4)
+        if not length_data:
+            return b""
+        msg_len = struct.unpack('>I', length_data)[0]
 
-    def _recv_all(self, timeout: float = 0.01) -> str:
-        self.sock.settimeout(timeout)
+        # Read the message data
         data = b""
-        try:
-            while True:
-                chunk = self.sock.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-        except socket.timeout:
-            pass
-        finally:
-            self.sock.settimeout(None)
+        while len(data) < msg_len:
+            packet = self.sock.recv(msg_len - len(data))
+            if not packet:
+                return b"" # Connection broken
+            data += packet
         
-        if self.aes_key and self.aes_iv and data:
+        self.debug_print(f"Received {len(data)} bytes")
+        return data
+    def _recv_all(self) -> str:
+        data = self._recv_all_bytes()
+        if not data:
+            return ""
+
+        if self.aes_key and self.aes_iv:
             # Use AES decryption
             try:
                 decrypted_data = self.decrypt_with_aes(data)
@@ -233,7 +244,6 @@ class SocketBackend:
         raw = self._recv_all()
         if raw.startswith("200 OK"):
             if len(raw.split("\n")) > 1:
-                print(raw)
                 return raw.split("\n")[1:]
         return []
 
@@ -261,10 +271,11 @@ class SocketBackend:
     def get_file(self, repo: str, path: str, version: str = None) -> str:
         full_path = os.path.join(repo, path).replace("\\", "/")
         if version:
-            full_path = f"{full_path} {version}"
+            full_path = f"{full_path}  {version}"
         self._send(f"GET {full_path}")
         data = self._recv_all()
         if data.startswith("200 OK"):
+            # The content is everything after the first newline
             return data.split("\n", 1)[1]
         return ""
 
@@ -281,11 +292,25 @@ class SocketBackend:
     def get_file_bytes(self, repo: str, path: str, version: str = None) -> t.Optional[bytes]:
         full_path = os.path.join(repo, path).replace("\\", "/")
         if version:
-            full_path = f"{full_path} {version}"
+            full_path = f"{full_path}  {version}"
         self._send(f"GET {full_path}")
-        data = self._recv_all_bytes()
-        if data.startswith(b"200 OK"):
-            return data.split(b"\n", 1)[1]
+        
+        # Receive the raw encrypted data
+        encrypted_data = self._recv_all_bytes()
+        if not encrypted_data:
+            return None
+
+        # Decrypt the data
+        try:
+            decrypted_data = self.decrypt_with_aes(encrypted_data)
+        except Exception as e:
+            self.debug_print(f"AES decryption failed in get_file_bytes: {e}")
+            return None
+
+        # Now, process the decrypted data
+        if decrypted_data.startswith(b"200 OK"):
+            # The content is everything after the first newline
+            return decrypted_data.split(b"\n", 1)[1]
         return None
 
     def search(self, name: str) -> str:
@@ -489,7 +514,7 @@ class LoginDialog(ctk.CTkToplevel):
         
         self.cancel_btn = ctk.CTkButton(
             button_frame, 
-            text="Cancel", 
+            text="Cancel",
             fg_color=G_PANEL, 
             hover_color="#1f2937",
             command=self._cancel
@@ -868,7 +893,7 @@ class Editor(ctk.CTkFrame):
         for p, b in self.tabs.items():
             b.configure(fg_color=(G_ACCENT if p == path else G_BG))
 
-    def _on_changed(self):
+    def _on_changed(self, event=None): # Added event parameter to accept Tkinter event object
         if self.active_path:
             self.status.configure(text=f"Editing {self.active_path} – Unsaved changes…")
 
@@ -1191,7 +1216,6 @@ class App(ctk.CTk):
         file=file.split("/", 1)
         repo_name = file[0]
         path_in_repo = file[1] if len(file) > 1 else ""
-        print(file ,path_in_repo)
 
         # Open the repository
         self._open_repo(repo_name)
