@@ -1,6 +1,6 @@
 import socket
 import os
-import threading
+import select
 import re
 import struct
 from DBHandler import DBHandler
@@ -15,6 +15,7 @@ HOST = '127.0.0.1'
 PORT = 2122
 BASE_DIR = "ftp_root"
 DEBUG = True
+MAX_FILE_SIZE = 2 * 1024 * 1024 # 2MB
 
 os.makedirs(BASE_DIR, exist_ok=True)
 
@@ -196,6 +197,7 @@ def handle_register(conn, state, context, **kwargs):
         send_response(conn, b"402 REGISTER FAILED: User already exists.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
         userDB.new_user(username, password)
+        state['name'] = username
         send_response(conn, b"201 REGISTER SUCCESS\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_list(conn, state, context, **kwargs):
@@ -291,6 +293,9 @@ def handle_get(conn, state, context, **kwargs):
         content = save_handler.get_file_at_version(file_path, version) # Returns bytes
 
         if content is not None:
+            if len(content) > MAX_FILE_SIZE:
+                send_response(conn, b"413 File too large to download.\n", state.get("aes_key"), state.get("aes_iv"))
+                return
             # The header is no longer needed here as the length of the whole message is sent by send_response
             send_response(conn, b"200 OK\n" + content, state.get("aes_key"), state.get("aes_iv"))
         else:
@@ -320,6 +325,9 @@ def handle_getdir(conn, state, context, **kwargs):
             if latest_version > 0:
                 content = save_handler.get_file_at_version(file_path, latest_version)
                 if content:
+                    if len(content) > MAX_FILE_SIZE:
+                        send_response(conn, f"INFO {file_path} - SKIPPED (too large)\n".encode(), state.get("aes_key"), state.get("aes_iv"))
+                        continue
                     size = len(content)
                     send_response(conn, f"FILE {file_path} {size}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
                     send_response(conn, content, state.get("aes_key"), state.get("aes_iv"))
@@ -346,9 +354,8 @@ def handle_getversions(conn, state, context, **kwargs):
             send_response(conn, b"404 No versions found for this file.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_put(conn, state, context, **kwargs):
-    """Handles uploading a file."""
+    """Initiates uploading a file."""
     fileDB = context['fileDB']
-    save_handler = context['saveHandler']
     username = state.get('name')
     arg = kwargs.get('arg')
 
@@ -361,46 +368,46 @@ def handle_put(conn, state, context, **kwargs):
         send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
         send_response(conn, b"200 OK: Send file data, end with EOF marker '<EOF>'\n", state.get("aes_key"), state.get("aes_iv"))
-        file_data = b""
-        while True:
-            chunk = conn.recv(1024)
-            if b"<EOF>" in chunk:
-                file_data += chunk.replace(b"<EOF>", b"")
-                break
-            if not chunk:
-                break
-            file_data += chunk
-        
-        latest_version = save_handler.get_latest_version(arg)
-        file_change = None
+        state['stage'] = 'uploading'
+        state['upload_path'] = arg
+        state['upload_buffer'] = b''
+        state['upload_size'] = 0
 
-        # Check for null byte to guess if it's a binary file
-        is_binary = b'\x00' in file_data
+def process_uploaded_file(conn, state, context, file_data):
+    """Processes the fully received file data."""
+    save_handler = context['saveHandler']
+    arg = state['upload_path']
 
-        if latest_version == 0:
-            # New file: the "change" is the full content.
+    latest_version = save_handler.get_latest_version(arg)
+    file_change = None
+
+    # Check for null byte to guess if it's a binary file
+    is_binary = b'\x00' in file_data
+
+    if latest_version == 0:
+        # New file: the "change" is the full content.
+        file_change = file_data
+    elif is_binary:
+        # Existing binary file: store the whole new file as the change.
+        file_change = file_data
+    else: # Existing text file: calculate a diff.
+        diff_checker = DiffCheck()
+        try:
+            old_content_bytes = save_handler.get_file_at_version(arg, latest_version)
+            old_content = old_content_bytes.decode('utf-8')
+            new_content = file_data.decode('utf-8')
+            file_change = diff_checker.check_diff(old_content, new_content)
+            if file_change:
+                file_change = file_change.encode('utf-8')
+        except (UnicodeDecodeError, ValueError):
+            # If diffing fails for any reason, fall back to storing the full file.
             file_change = file_data
-        elif is_binary:
-            # Existing binary file: store the whole new file as the change.
-            file_change = file_data
-        else: # Existing text file: calculate a diff.
-            diff_checker = DiffCheck()
-            try:
-                old_content_bytes = save_handler.get_file_at_version(arg, latest_version)
-                old_content = old_content_bytes.decode('utf-8')
-                new_content = file_data.decode('utf-8')
-                file_change = diff_checker.check_diff(old_content, new_content)
-                if file_change:
-                    file_change = file_change.encode('utf-8')
-            except (UnicodeDecodeError, ValueError):
-                # If diffing fails for any reason, fall back to storing the full file.
-                file_change = file_data
 
-        if file_change is not None:
-            save_handler.save_file(arg, file_change)
-            send_response(conn, b"200 File uploaded successfully.\n", state.get("aes_key"), state.get("aes_iv"))
-        else:
-            send_response(conn, b"200 File is already up to date.\n", state.get("aes_key"), state.get("aes_iv"))
+    if file_change is not None:
+        save_handler.save_file(arg, file_change)
+        send_response(conn, b"200 File uploaded successfully.\n", state.get("aes_key"), state.get("aes_iv"))
+    else:
+        send_response(conn, b"200 File is already up to date.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_mkdir(conn, state, context, **kwargs):
     """Handles creating a directory."""
@@ -593,74 +600,134 @@ def run_command(conn, state, context, command_string):
     debug_print(f"Calling handler for {cmd} with args: {parsed_args}")
     return config['handler'](conn, state, context, **parsed_args)
 
-def handle_client(conn, addr):
-    print(f"[+] Connected by {addr}")
-    send_response(conn, b"220 Welcome Server Online\n")
-    client_state = {"name": None, "aes_key": None, "aes_iv": None}
-    server_context = {
-        "fileDB": DBHandler(),
-        "userDB": UserHandler(),
-        "saveHandler": SaveHandler()
-    }
+def main():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.setblocking(False)
+    server_socket.bind((HOST, PORT))
+    server_socket.listen(5)
+
+    inputs = [server_socket]
+    client_data = {} # Will store state and context for each client socket
+
+    print(f"[+] FTP-like server listening on {HOST}:{PORT}")
 
     try:
-        # First, receive the encrypted AES key
-        encrypted_aes_data = conn.recv(1024)  # RSA encrypted AES key
-        if encrypted_aes_data:
-            try:
-                aes_key, aes_iv = decrypt_aes_key_with_rsa(encrypted_aes_data)
-                client_state["aes_key"] = aes_key
-                client_state["aes_iv"] = aes_iv
-                debug_print("Successfully decrypted AES key from client")
-            except Exception as e:
-                debug_print(f"Failed to decrypt AES key: {e}")
-                return
-        
-        while True:
-            # Receive length-prefixed encrypted data
-            length_data = conn.recv(4)
-            if not length_data:
-                break
-            
-            msg_len = struct.unpack('>I', length_data)[0]
-            
-            encrypted_data = b""
-            while len(encrypted_data) < msg_len:
-                packet = conn.recv(msg_len - len(encrypted_data))
-                if not packet:
-                    break
-                encrypted_data += packet
+        while inputs:
+            readable, _, _ = select.select(inputs, [], [])
 
-            if not encrypted_data:
-                break
-            
-            # Decrypt with AES
-            try:
-                decrypted_data = decrypt_with_aes(encrypted_data, client_state["aes_key"], client_state["aes_iv"])
-                data = decrypted_data.decode().strip()
-            except Exception as e:
-                debug_print(f"AES decryption failed: {e}")
-                continue
+            for s in readable:
+                if s is server_socket:
+                    # A new connection is ready
+                    conn, addr = s.accept()
+                    print(f"[+] Connected by {addr}")
+                    inputs.append(conn)
 
-            if run_command(conn, client_state, server_context, data) == "QUIT":
-                break
+                    # Send welcome message (unencrypted)
+                    send_response(conn, b"220 Welcome Server Online\n")
+                    
+                    # Initialize client data
+                    client_data[conn] = {
+                        "addr": addr,
+                        "state": {"name": None, "aes_key": None, "aes_iv": None, "stage": "key_exchange"},
+                        "context": {
+                            "fileDB": DBHandler(),
+                            "userDB": UserHandler(),
+                            "saveHandler": SaveHandler()
+                        },
+                        "buffer": b""
+                    }
+                else:
+                    # Data from a client
+                    try:
+                        data = s.recv(4096)
+                        if data:
+                            client_info = client_data[s]
+                            client_state = client_info["state"]
+                            
+                            if client_state.get("stage") == "key_exchange":
+                                try:
+                                    aes_key, aes_iv = decrypt_aes_key_with_rsa(data)
+                                    client_state["aes_key"] = aes_key
+                                    client_state["aes_iv"] = aes_iv
+                                    client_state["stage"] = "command"
+                                    debug_print(f"Successfully decrypted AES key from {client_info['addr']}")
+                                except Exception as e:
+                                    debug_print(f"Failed to decrypt AES key from {client_info['addr']}: {e}")
+                                    raise ConnectionAbortedError("Key exchange failed")
+                            
+                            elif client_state.get("stage") == "uploading":
+                                client_state['upload_buffer'] += data
+                                client_state['upload_size'] += len(data)
+
+                                if client_state['upload_size'] > MAX_FILE_SIZE:
+                                    send_response(s, b"413 File is too large.\n", client_state.get("aes_key"), client_state.get("aes_iv"))
+                                    client_state['stage'] = 'command'
+                                    # Clean up upload state
+                                    del client_state['upload_buffer']
+                                    del client_state['upload_size']
+                                    del client_state['upload_path']
+                                    continue
+
+                                if b"<EOF>" in client_state['upload_buffer']:
+                                    file_data = client_state['upload_buffer'].replace(b"<EOF>", b"")
+                                    
+                                    process_uploaded_file(s, client_state, client_info["context"], file_data)
+                                    
+                                    # Reset state after upload is complete
+                                    client_state['stage'] = 'command'
+                                    del client_state['upload_buffer']
+                                    del client_state['upload_size']
+                                    del client_state['upload_path']
+
+                            elif client_state.get("stage") == "command":
+                                client_info["buffer"] += data
+                                buffer = client_info["buffer"]
+
+                                # Process buffer for complete messages
+                                while len(buffer) >= 4:
+                                    msg_len = struct.unpack('>I', buffer[:4])[0]
+                                    if len(buffer) >= 4 + msg_len:
+                                        encrypted_message = buffer[4:4 + msg_len]
+                                        client_info["buffer"] = buffer[4 + msg_len:]
+                                        buffer = client_info["buffer"]
+
+                                        decrypted_data = decrypt_with_aes(encrypted_message, client_state["aes_key"], client_state["aes_iv"])
+                                        command_str = decrypted_data.decode().strip()
+                                        
+                                        if run_command(s, client_state, client_info["context"], command_str) == "QUIT":
+                                            raise ConnectionAbortedError("Client quit")
+                                        
+                                        # If the command changed the state to uploading, break the loop
+                                        if client_state.get("stage") == "uploading":
+                                            break
+                                    else:
+                                        # Not enough data for a full message, wait for more
+                                        break
+                        else:
+                            # No data means connection closed by client
+                            raise ConnectionAbortedError("Client disconnected")
+                    except (ConnectionAbortedError, ConnectionResetError, UnicodeDecodeError, struct.error) as e:
+                        addr = client_data.get(s, {}).get('addr', 'Unknown')
+                        print(f"[-] {addr} disconnected. Reason: {e}")
+                        inputs.remove(s)
+                        if s in client_data:
+                            # Clean up client data
+                            client_data[s]['context']['fileDB'].close()
+                            client_data[s]['context']['userDB'].close()
+                            client_data[s]['context']['saveHandler'].close()
+                            del client_data[s]
+                        s.close()
+
+    except KeyboardInterrupt:
+        print("\n[!] Server shutting down.")
     finally:
-        conn.close()
-        server_context['fileDB'].close()
-        server_context['userDB'].close()
-        server_context['saveHandler'].close()
-        print(f"[-] {addr} disconnected")
-
-def main():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((HOST, PORT))
-        s.listen()
-        print(f"[+] FTP-like server listening on {HOST}:{PORT}")
-        while True:
-            conn, addr = s.accept()
-            thread = threading.Thread(target=handle_client, args=(conn, addr))
-            thread.start()
-            print(f"[ACTIVECONNECTIONS] {threading.active_count() - 1}")
+        for s in inputs:
+            if s in client_data:
+                client_data[s]['context']['fileDB'].close()
+                client_data[s]['context']['userDB'].close()
+                client_data[s]['context']['saveHandler'].close()
+            s.close()
 
 if __name__ == "__main__":
     main()

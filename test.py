@@ -289,6 +289,20 @@ class SocketBackend:
             return response.startswith("200")
         return False
 
+    def upload_file(self, repo: str, path: str, local_filepath: str) -> str:
+        """Uploads a local file to the server."""
+        full_path = os.path.join(repo, path).replace("\\", "/")
+        self._send(f"PUT {full_path}")
+        response = self._recv_all()
+        if response.startswith("200 OK"):
+            with open(local_filepath, "rb") as f:
+                content = f.read()
+            self.sock.sendall(content + b"<EOF>")
+            final_response = self._recv_all()
+            return final_response
+        else:
+            return response
+
     def get_file_bytes(self, repo: str, path: str, version: str = None) -> t.Optional[bytes]:
         full_path = os.path.join(repo, path).replace("\\", "/")
         if version:
@@ -964,23 +978,25 @@ class ExplorerView(ctk.CTkFrame):
             filepath = filedialog.askopenfilename()
             if not filepath:
                 return
+
+            repo = self.explorer.repo
+            if not repo:
+                messagebox.showwarning("Upload", "No repository selected.")
+                return
+
             remote_path = "/".join([p for p in [self.explorer.path, os.path.basename(filepath)] if p])
-            full_remote = "/".join([self.explorer.repo, remote_path]).strip("/")
+            
             try:
-                with open(filepath, "rb") as f:
-                    data = f.read()
-                backend._send(f"PUT {full_remote}")
-                try:
-                    _ = backend.sock.recv(1024)
-                except Exception:
-                    pass
-                backend.sock.sendall(data + b"<EOF>")
-                try:
-                    _ = backend.sock.recv(1024)
-                except Exception:
-                    pass
+                response = backend.upload_file(repo, remote_path, filepath)
+                if response.startswith("200"):
+                    messagebox.showinfo("Upload", "File uploaded successfully.")
+                elif "413" in response:
+                    messagebox.showerror("Upload failed", "File is too large.")
+                else:
+                    messagebox.showerror("Upload failed", response)
             except Exception as e:
                 messagebox.showerror("Upload failed", str(e))
+            
             self.explorer.refresh()
 
         def do_getdir():
@@ -1009,7 +1025,7 @@ class AccountView(ctk.CTkFrame):
         self.grid_columnconfigure(2, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        ctk.CTkLabel(self, text="Account Settings", font=("Inter", 18, "bold")).grid(row=0, column=0, columnspan=3, padx=8, pady=(8, 4), sticky="ew")
+        ctk.CTkLabel(self, text=f"Account Settings:{backend.name}", font=("Inter", 18, "bold")).grid(row=0, column=0, columnspan=3, padx=8, pady=(8, 4), sticky="ew")
 
         # --- Left Column ---
         left_column = ctk.CTkFrame(self, fg_color="transparent")
@@ -1126,6 +1142,7 @@ class App(ctk.CTk):
         self.configure(fg_color=G_BG)
         dialog = LoginDialog(self, self._on_login, self._on_register)
         dialog.wait_window()
+        
         self.searchFrame = None
         self.file_buttons = []
         # Layout grid
