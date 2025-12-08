@@ -3,6 +3,9 @@ import re
 import os
 import difflib
 from BaseDBHandler import BaseDBHandler
+import win32file
+import pywintypes
+import win32con
 
 
 class DiffCheck:
@@ -130,9 +133,34 @@ class SaveHandler(BaseDBHandler):
 
         os.makedirs("Abyss", exist_ok=True)
         file_path = os.path.join("Abyss", id_hash)
-        with open(file_path, "ab") as f:
-            f.write(file_change)
-            f.write(f"\n--- FNSepV{next_version} ---\n".encode('utf-8'))
+        
+        try:
+            # Open the file for writing (and implicitly appending by setting file pointer)
+            handle = win32file.CreateFile(
+                file_path,
+                win32con.GENERIC_WRITE, # Use GENERIC_WRITE for writing
+                win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE,
+                None,
+                win32con.OPEN_ALWAYS, # Create if not exists, open if exists
+                0,
+                None
+            )
+            
+            # Move the file pointer to the end of the file to append
+            win32file.SetFilePointer(handle, 0, win32con.FILE_END)
+            
+            # Append the file change and the separator
+            win32file.WriteFile(handle, file_change)
+            win32file.WriteFile(handle, f"\n--- FNSepV{next_version} ---\n".encode('utf-8'))
+            
+            # Close the handle
+            win32file.CloseHandle(handle)
+            
+        except pywintypes.error as e:
+            print(f"Error saving file with win32file: {e}")
+            # Fallback or error handling can be added here
+            return None, None
+
         self.conn.commit()
         return id_hash, next_version
 
