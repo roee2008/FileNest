@@ -79,7 +79,6 @@ def decrypt_aes_key_with_rsa(encrypted_aes_data):
             password=None,
             backend=default_backend()
         )
-    
     # Decrypt the combined AES key and IV
     decrypted_data = private_key.decrypt(
         encrypted_aes_data,
@@ -489,6 +488,56 @@ def handle_quit(conn, state, context, **kwargs):
     send_response(conn, b"221 Goodbye!\n", state.get("aes_key"), state.get("aes_iv"))
     return "QUIT"
 
+def handle_changepass(conn, state, context, **kwargs):
+    """Handles changing user password."""
+    userDB = context['userDB']
+    username = state.get('name')
+    old_password = kwargs.get('old_password')
+    new_password = kwargs.get('new_password')
+
+    if not username:
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    # Verify the old password
+    user_data = userDB.get_user(username)
+    if not user_data or user_data[1] != old_password:
+        send_response(conn, b"401 Old password is incorrect.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    # Update to the new password
+    try:
+        userDB.update_password(username, new_password)
+        send_response(conn, b"200 Password changed successfully.\n", state.get("aes_key"), state.get("aes_iv"))
+    except Exception as e:
+        send_response(conn, f"500 Failed to change password: {e}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
+
+def handle_deleteaccount(conn, state, context, **kwargs):
+    """Handles deleting user account."""
+    userDB = context['userDB']
+    fileDB = context['fileDB']
+    username = state.get('name')
+
+    if not username:
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    try:
+        # Delete all repositories owned by the user
+        repos = fileDB.get_user_files(username, include_shared=False)
+        for repo in repos:
+            repo_id = repo[0]
+            fileDB.delete_file(repo_id)
+        
+        # Delete the user account
+        userDB.delete_user(username)
+        
+        send_response(conn, b"200 Account deleted successfully.\n", state.get("aes_key"), state.get("aes_iv"))
+        state['name'] = None  # Clear the session
+        return "QUIT"  # Disconnect the client
+    except Exception as e:
+        send_response(conn, f"500 Failed to delete account: {e}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
+
 command_handlers = {
     "LOGIN": {
         "handler": handle_login,
@@ -561,6 +610,18 @@ command_handlers = {
         "args": ["repo_name"],
         "separator": None,
         "description": "Creates a new repository. Usage: CREATEREPO <repo_name>"
+    },
+    "CHANGEPASS": {
+        "handler": handle_changepass,
+        "args": ["old_password", "new_password"],
+        "separator": "_",
+        "description": "Changes password. Usage: CHANGEPASS <old_password>_<new_password>"
+    },
+    "DELETEACCOUNT": {
+        "handler": handle_deleteaccount,
+        "args": [],
+        "separator": None,
+        "description": "Deletes the current user account."
     },
     "QUIT": {
         "handler": handle_quit,

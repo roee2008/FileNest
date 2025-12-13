@@ -449,6 +449,23 @@ class SocketBackend:
             return versions
         return []
 
+    def change_password(self, old_password: str, new_password: str) -> bool:
+        """Change user password. Returns True if successful."""
+        old_hash = hashlib.sha256(f'{old_password}'.encode()).hexdigest()
+        new_hash = hashlib.sha256(f'{new_password}'.encode()).hexdigest()
+        self._send(f"CHANGEPASS {old_hash}_{new_hash}")
+        response = self._recv_all()
+        if response.startswith("200"):
+            self.password = new_hash
+            return True
+        return False
+
+    def delete_account(self) -> bool:
+        """Delete the current user account. Returns True if successful."""
+        self._send("DELETEACCOUNT")
+        response = self._recv_all()
+        return response.startswith("200")
+
 # ---------- Utility ----------
 class Divider(ctk.CTkFrame):
     def __init__(self, master, height=1, fg=G_BORDER, **kw):
@@ -710,22 +727,27 @@ class Explorer(ctk.CTkFrame):
         self._render_empty()
 
     def _do_download(self, p, fname, isdir, version=None):
-        if isdir:
-            dest_dir = filedialog.askdirectory(title=f"Choose folder to save '{fname}'")
-            if not dest_dir:
-                return
-            self.backend.get_dir_to(f"{self.repo}/{p}".strip("/"), dest_dir)
-        else:
-            print(f"Downloading file: {p} version: {version}")
-            data = self.backend.get_file_bytes(self.repo, p, version)
-            if data is None:
-                messagebox.showwarning("Download", f"Cannot download: {p}")
-                return
-            dst = filedialog.asksaveasfilename(initialfile=fname)
-            if not dst:
-                return
-            with open(dst, "wb") as f:
-                f.write(data)
+        def download_worker():
+            if isdir:
+                dest_dir = filedialog.askdirectory(title=f"Choose folder to save '{fname}'")
+                if not dest_dir:
+                    return
+                self.backend.get_dir_to(f"{self.repo}/{p}".strip("/"), dest_dir)
+            else:
+                print(f"Downloading file: {p} version: {version}")
+                data = self.backend.get_file_bytes(self.repo, p, version)
+                if data is None:
+                    messagebox.showwarning("Download", f"Cannot download: {p}")
+                    return
+                dst = filedialog.asksaveasfilename(initialfile=fname)
+                if not dst:
+                    return
+                with open(dst, "wb") as f:
+                    f.write(data)
+        
+        # Run download in a separate thread to avoid blocking the UI
+        download_thread = threading.Thread(target=download_worker, daemon=True)
+        download_thread.start()
 
     def open_repo(self, repo: str,path: str = ""):
         self.repo = repo
@@ -1074,16 +1096,16 @@ class AccountView(ctk.CTkFrame):
         self.create_repo_button.grid(row=0, column=1, sticky="e")
 
         # Change Password
-        ctk.CTkButton(settings_frame, text="Change Password", anchor="w", fg_color="transparent"
-                      , hover=False).grid(row=2, column=0, sticky="ew", padx=12, pady=4)
+        ctk.CTkButton(settings_frame, text="Change Password", anchor="w", fg_color="transparent",
+                      hover_color="#0f172a", command=self.change_password_action).grid(row=2, column=0, sticky="ew", padx=12, pady=4)
         
         # Logout
-        ctk.CTkButton(settings_frame, text="Logout", anchor="w", fg_color="transparent"
-                      , hover=False).grid(row=3, column=0, sticky="ew", padx=12, pady=4)
+        ctk.CTkButton(settings_frame, text="Logout", anchor="w", fg_color="transparent",
+                      hover_color="#0f172a", command=self.logout_action).grid(row=3, column=0, sticky="ew", padx=12, pady=4)
 
         # Delete Account (with warning color)
-        ctk.CTkButton(settings_frame, text="Delete Account", anchor="w", text_color="#f85149", fg_color="transparent"
-                      , hover=False).grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 12))
+        ctk.CTkButton(settings_frame, text="Delete Account", anchor="w", text_color="#f85149", fg_color="transparent",
+                      hover_color="#0f172a", command=self.delete_account_action).grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 12))
 
 
     def create_repository_action(self):
@@ -1129,6 +1151,101 @@ class AccountView(ctk.CTkFrame):
                 messagebox.showinfo("Success", f"User {user_to_add} added to {self.selected_repo}")
             else:
                 messagebox.showerror("Error", f"Failed to add user {user_to_add} to {self.selected_repo}")
+
+    def change_password_action(self):
+        """Handle password change request."""
+        # Create a dialog to get old and new passwords
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Change Password")
+        dialog.geometry("350x250")
+        dialog.resizable(False, False)
+        dialog.configure(fg_color=G_BG)
+        dialog.transient(self.master)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (350 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (250 // 2)
+        dialog.geometry(f"350x250+{x}+{y}")
+        
+        # Old password
+        ctk.CTkLabel(dialog, text="Old Password:", text_color=G_TEXT).pack(anchor="w", padx=20, pady=(20, 0))
+        old_password_entry = ctk.CTkEntry(dialog, show="*", fg_color=G_PANEL, border_color=G_BORDER)
+        old_password_entry.pack(fill="x", padx=20, pady=(0, 10))
+        
+        # New password
+        ctk.CTkLabel(dialog, text="New Password:", text_color=G_TEXT).pack(anchor="w", padx=20)
+        new_password_entry = ctk.CTkEntry(dialog, show="*", fg_color=G_PANEL, border_color=G_BORDER)
+        new_password_entry.pack(fill="x", padx=20, pady=(0, 10))
+        
+        # Confirm password
+        ctk.CTkLabel(dialog, text="Confirm New Password:", text_color=G_TEXT).pack(anchor="w", padx=20)
+        confirm_password_entry = ctk.CTkEntry(dialog, show="*", fg_color=G_PANEL, border_color=G_BORDER)
+        confirm_password_entry.pack(fill="x", padx=20, pady=(0, 20))
+        
+        def submit_change():
+            old_pass = old_password_entry.get()
+            new_pass = new_password_entry.get()
+            confirm_pass = confirm_password_entry.get()
+            
+            if not old_pass or not new_pass or not confirm_pass:
+                messagebox.showwarning("Input Error", "Please fill all fields")
+                return
+            
+            if new_pass != confirm_pass:
+                messagebox.showerror("Error", "New passwords do not match")
+                return
+            
+            if self.backend.change_password(old_pass, new_pass):
+                messagebox.showinfo("Success", "Password changed successfully")
+                dialog.destroy()
+            else:
+                messagebox.showerror("Error", "Failed to change password. Check your old password.")
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        button_frame.pack(fill="x", padx=20, pady=(0, 10))
+        
+        ctk.CTkButton(button_frame, text="Change Password", fg_color=G_ACCENT, 
+                      hover_color="#1f6feb", command=submit_change).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(button_frame, text="Cancel", fg_color=G_PANEL, 
+                      hover_color="#1f2937", command=dialog.destroy).pack(side="right")
+        
+        old_password_entry.focus()
+
+    def logout_action(self):
+        """Handle logout request."""
+        confirm = messagebox.askyesno("Logout", "Are you sure you want to logout?")
+        if confirm:
+            self.backend.logout()
+            # Close and restart the app to show login dialog
+            self.master.master.destroy()
+
+    def delete_account_action(self):
+        """Handle account deletion request."""
+        confirm = messagebox.askyesno(
+            "Delete Account", 
+            "Are you sure you want to delete your account?\nThis action cannot be undone!",
+            icon="warning"
+        )
+        if not confirm:
+            return
+        
+        # Ask for confirmation again
+        final_confirm = messagebox.askyesno(
+            "Final Confirmation",
+            "This will permanently delete your account and all your data.\nAre you absolutely sure?",
+            icon="warning"
+        )
+        if final_confirm:
+            if self.backend.delete_account():
+                messagebox.showinfo("Account Deleted", "Your account has been successfully deleted.")
+                self.backend.logout()
+                # Close the application
+                self.master.master.destroy()
+            else:
+                messagebox.showerror("Error", "Failed to delete account. Please try again.")
 
 # ---------- App ----------
 class App(ctk.CTk):
