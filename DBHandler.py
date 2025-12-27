@@ -1,7 +1,7 @@
 from BaseDBHandler import BaseDBHandler
 
 class DBHandler(BaseDBHandler):
-    def __init__(self, db_name="ReposDB.sqlite"):
+    def __init__(self, db_name="ReposDB.db"):
         super().__init__(db_name)
         self.create_tables()
 

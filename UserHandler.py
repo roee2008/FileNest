@@ -2,7 +2,7 @@ import hashlib
 from BaseDBHandler import BaseDBHandler
 
 class UserHandler(BaseDBHandler):
-    def __init__(self, db_name="UserDB.sqlite"):
+    def __init__(self, db_name="UserDB.db"):
         super().__init__(db_name)
         self.create_tables()
 

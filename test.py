@@ -13,14 +13,14 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 import secrets
 
-# ---------- Color Theme ----------
-G_BG       = "#0d1117"  # page background
-G_PANEL    = "#161b22"  # panels/cards
-G_BORDER   = "#30363d"
-G_TEXT     = "#c9d1d9"
-G_SUBTLE   = "#8b949e"
-G_ACCENT   = "#2f81f7"
-G_ACCENT_2 = "#3fb950"  # success green
+# ---------- Color Theme (Midnight Slate) ----------
+G_BG       = "#0f172a"  # Slate 950
+G_PANEL    = "#1e293b"  # Slate 800
+G_BORDER   = "#334155"  # Slate 700
+G_TEXT     = "#f1f5f9"  # Slate 100
+G_SUBTLE   = "#94a3b8"  # Slate 400
+G_ACCENT   = "#3b82f6"  # Blue 500
+G_ACCENT_2 = "#10b981"  # Emerald 500
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -611,31 +611,44 @@ class LoginDialog(ctk.CTkToplevel):
         """Return True if login was successful, False otherwise."""
         return self.result
 
-
-
 # ---------- Top Bar ----------
 class TopBar(ctk.CTkFrame):
     def __init__(self, master, on_search: t.Callable[[str], None], on_login: t.Callable[[], None]):
-        super().__init__(master, fg_color=G_PANEL)
-        self.grid_columnconfigure(1, weight=1)
+        super().__init__(master, fg_color=G_PANEL, height=60)
+        self.grid_columnconfigure(0, weight=1)
         self.on_login = on_login
         self.master = master
         self.search_timer = None
 
-        self.logo = ctk.CTkLabel(self, text="", font=("Segoe UI Symbol", 22), text_color=G_TEXT)
-        self.logo.grid(row=0, column=0, padx=(12, 8), pady=10)
-
-        self.search = ctk.CTkEntry(self, placeholder_text="Search…", fg_color=G_BG, border_color=G_BORDER)
-        self.search.grid(row=0, column=1, sticky="ew", padx=6, pady=10)
+        # Search Bar
+        self.search = ctk.CTkEntry(
+            self, 
+            placeholder_text="Search...", 
+            fg_color=G_BG, 
+            border_color=G_BORDER, 
+            border_width=1, 
+            corner_radius=20,
+            height=40,
+            text_color=G_TEXT,
+            font=("Inter", 13)
+        )
+        self.search.grid(row=0, column=0, sticky="ew", padx=20, pady=10)
         self.search.bind("<KeyRelease>", lambda e: self._on_search_delayed(on_search))
-        self.logo.grid(row=0, column=3, padx=(6, 12))
 
-        self.avatar = ctk.CTkLabel(self, text="", width=34, height=34, corner_radius=17,
-                                   fg_color=G_BG, text_color=G_TEXT, font=("Inter", 12, "bold"))
-        self.avatar.grid(row=0, column=3, padx=(6, 12))
-        # Bind click event to avatar for login
+        # Avatar
+        self.avatar = ctk.CTkLabel(
+            self, 
+            text="", 
+            width=40, 
+            height=40, 
+            corner_radius=20,
+            fg_color=G_BG, 
+            text_color=G_TEXT, 
+            font=("Inter", 14, "bold")
+        )
+        self.avatar.grid(row=0, column=1, padx=(0, 20), pady=10)
         self.avatar.bind("<Button-1>", lambda e: self.on_login())
-
+        
     def _on_search_delayed(self, on_search):
         if self.search_timer:
             self.master.after_cancel(self.search_timer)
@@ -653,39 +666,51 @@ class SideBar(ctk.CTkFrame):
     def __init__(self, master, on_nav: t.Callable[[str], None], on_refresh_repos: t.Callable[[], None]):
         super().__init__(master, fg_color=G_PANEL, corner_radius=0)
         self.on_nav = on_nav
-        self.buttons: dict[str, ctk.CTkButton] = {}
-        items = [
-            ("Home", "Home"),
-            ("Repositories", "Explorer"),
-            ("Account", "Account"),
-        ]
-        for i, (key, label) in enumerate(items):
-            ctk.CTkButton(
-                self, text=label, fg_color="transparent", hover_color="#0f172a",
-                corner_radius=8, anchor="w", command=lambda k=key: self.on_nav(k)
-            ).pack(fill="x", padx=10, pady=(8 if i == 0 else 4, 0))
-
-        Divider(self).pack(fill="x", padx=10, pady=10)
-
+        self.backend = master.backend if hasattr(master, 'backend') else None 
+        self.on_open_repo_callback = None 
+        # Repositories Header
         repo_header = ctk.CTkFrame(self, fg_color="transparent")
-        repo_header.pack(fill="x", padx=10, pady=(0, 4))
-        self.repo_label = ctk.CTkLabel(repo_header, text="Repositories", text_color=G_SUBTLE)
+        repo_header.pack(fill="x", padx=12, pady=(20, 8))
+        
+        self.repo_label = ctk.CTkLabel(repo_header, text="Repositories", text_color=G_SUBTLE, font=("Inter", 12, "bold"))
         self.repo_label.pack(side="left")
 
-        self.refresh_btn = ctk.CTkButton(repo_header, text="🔄", width=28, height=28, fg_color="transparent", hover_color="#0f172a", command=on_refresh_repos)
-        self.refresh_btn.pack(side="right")
+        # Buttons frame (Refresh + Add)
+        btns_frame = ctk.CTkFrame(repo_header, fg_color="transparent")
+        btns_frame.pack(side="right")
 
-        self.repo_list = ctk.CTkScrollableFrame(self, fg_color=G_BG)
+        self.refresh_btn = ctk.CTkButton(btns_frame, text="🔄", width=24, height=24, fg_color="transparent", hover_color="#334155", command=on_refresh_repos)
+        self.refresh_btn.pack(side="right", padx=2)
+        
+        # New Repo Button (+)
+        self.add_repo_btn = ctk.CTkButton(btns_frame, text="➕", width=24, height=24, fg_color="transparent", hover_color="#334155", command=self._request_new_repo)
+        self.add_repo_btn.pack(side="right", padx=2)
+
+        self.repo_list = ctk.CTkScrollableFrame(self, fg_color=G_BG, corner_radius=10) # Slightly darker BG for list
         self.repo_list.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
+    def _request_new_repo(self):
+        # Switch to account view to create repo
+        if isinstance(self.master, App):
+            self.on_nav("Account")
+            # Ideally focus the create repo entry, but simple nav is fine
+
     def populate_repos(self, repos: list[str], on_click_repo: t.Callable[[str], None]):
-        #print(f"DEBUG: Populating repos: {repos}")
+        self.on_open_repo_callback = on_click_repo
+        if hasattr(self.master, 'backend'): self.backend = self.master.backend 
+        
         for w in self.repo_list.winfo_children():
             w.destroy()
         for r in repos:
-            btn = ctk.CTkButton(self.repo_list, text=r, fg_color=G_PANEL, hover_color="#1f2937",
+            # Use folder icon
+            btn = ctk.CTkButton(self.repo_list, text=f"📁 {r}", fg_color="transparent", hover_color="#334155",
+                                 text_color=G_TEXT,
+                                 anchor="w",
+                                 font=("Inter", 13),
                                  corner_radius=6, command=lambda name=r: on_click_repo(name))
-            btn.pack(fill="x", padx=6, pady=4)
+            btn.pack(fill="x", padx=4, pady=2)
+            
+
 
 # ---------- Cards & Tiles ----------
 class RepoCard(ctk.CTkFrame):
@@ -714,11 +739,6 @@ class Explorer(ctk.CTkFrame):
         # Breadcrumbs
         self.breadcrumb = ctk.CTkLabel(self, text="", text_color=G_SUBTLE)
         self.breadcrumb.pack(anchor="w", padx=8, pady=(8, 4))
-        
-        # Status bar
-        self.status = ctk.CTkLabel(self, text="Right-click items marked with ❓ to try opening as file",
-                                    text_color=G_SUBTLE, font=("Inter", 10))
-        self.status.pack(anchor="w", padx=8, pady=(0, 4))
 
         # File list
         self.list = ctk.CTkScrollableFrame(self, fg_color=G_PANEL, border_color=G_BORDER, border_width=1,
@@ -945,17 +965,33 @@ class Editor(ctk.CTkFrame):
             self.status.configure(text=f"Failed to save {self.active_path}")
 
 # ---------- Main Views ----------
-class HomeView(ctk.CTkScrollableFrame):
+class HomeView(ctk.CTkFrame):
     def __init__(self, master, backend: SocketBackend, on_open_repo: t.Callable[[str], None]):
         super().__init__(master, fg_color=G_BG)
-        ctk.CTkLabel(self, text="Overview", font=("Inter", 18, "bold")).pack(anchor="w", padx=8, pady=(8, 4))
-        grid = ctk.CTkFrame(self, fg_color=G_BG)
-        grid.pack(fill="both", expand=False, padx=6, pady=4)
-        grid.grid_columnconfigure((0,1), weight=1)
-        repos = backend.list_repos()
+        self.backend = backend
+        self.on_open_repo = on_open_repo
+        
+        # Header
+        self.header = ctk.CTkLabel(self, text="Overview", font=("Inter", 24, "bold"), text_color=G_TEXT)
+        self.header.pack(anchor="w", padx=20, pady=(20, 10))
+        
+        # Scrollable Grid for Repos
+        self.scroll_container = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll_container.pack(fill="both", expand=True, padx=10, pady=10)
+        self.scroll_container.grid_columnconfigure((0,1,2), weight=1) # 3 columns
+        
+        self.refresh()
+
+    def refresh(self):
+        for w in self.scroll_container.winfo_children():
+            w.destroy()
+            
+        repos = self.backend.list_repos()
         for i, r in enumerate(repos):
-            card = RepoCard(grid, r, "Remote server", on_open=lambda name=r: on_open_repo(name))
-            card.grid(row=i//2, column=i%2, sticky="ew", padx=6, pady=6)
+            card = RepoCard(self.scroll_container, r, "Remote Repository", on_open=lambda name=r: self.on_open_repo(name))
+            card.grid(row=i//3, column=i%3, sticky="ew", padx=10, pady=10)
+
+
     
 
 class ExplorerView(ctk.CTkFrame):
@@ -963,77 +999,127 @@ class ExplorerView(ctk.CTkFrame):
         super().__init__(master, fg_color=G_BG)
         self.backend = backend
 
-        # Toolbar
-        bar = ctk.CTkFrame(self, fg_color=G_PANEL)
-        bar.pack(fill="x")
+        # Main Layout
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
 
-        # Content split
-        split = ctk.CTkFrame(self, fg_color=G_BG)
-        split.pack(fill="both", expand=True)
-        split.grid_columnconfigure(0, weight=1, uniform="x")
-        split.grid_columnconfigure(1, weight=2, uniform="x")
+        # 2. Split View (Explorer + Editor)
+        self.split = ctk.CTkFrame(self, fg_color="transparent")
+        self.split.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self.split.grid_columnconfigure(0, weight=1, uniform="group1")
+        self.split.grid_columnconfigure(1, weight=2, uniform="group1")
+        self.split.grid_rowconfigure(0, weight=1)
+        
+        # Explorer Container
+        self.explorer_frame = ctk.CTkFrame(self.split, fg_color=G_PANEL, corner_radius=20, border_width=1, border_color=G_BORDER)
+        self.explorer_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.explorer_frame.grid_rowconfigure(1, weight=1)
+        self.explorer_frame.grid_columnconfigure(0, weight=1)
 
-        # Create children inside split
-        self.explorer = Explorer(split, backend, on_open_file=self._open_in_editor)
-        self.editor   = Editor(split, backend, repo_getter=lambda: self.explorer.repo)
+        # Explorer Title/Header
+        self.repo_title = ctk.CTkLabel(self.explorer_frame, text="", font=("Inter", 16, "bold"), anchor="w")
+        self.repo_title.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
 
-        self.explorer.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
-        self.editor.grid(row=0, column=1, sticky="nsew", padx=(4, 8), pady=8)
+        self.explorer = Explorer(self.explorer_frame, backend, on_open_file=self._open_in_editor)
+        self.explorer.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        
+        # Override explorer color to transparent to blend with container
+        self.explorer.configure(fg_color="transparent")
+        self.explorer.list.configure(fg_color="transparent", border_width=0)
 
-        # Toolbar buttons (now bound to self.explorer/self.editor)
-        btn_refresh = ctk.CTkButton(bar, text="Refresh", fg_color=G_BG, hover_color="#0f172a",
-                                    command=self.explorer.refresh)
-        btn_refresh.pack(side="left", padx=6, pady=6)
+
+        # Editor Container
+        self.editor_frame = ctk.CTkFrame(self.split, fg_color=G_PANEL, corner_radius=20, border_width=1, border_color=G_BORDER)
+        self.editor_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        self.editor_frame.grid_rowconfigure(1, weight=1)
+        self.editor_frame.grid_columnconfigure(0, weight=1)
+
+        self.editor   = Editor(self.editor_frame, backend, repo_getter=lambda: self.explorer.repo)
+        self.editor.grid(row=1, column=0, sticky="nsew", padx=15, pady=15)
+        self.editor.configure(fg_color="transparent")
+        self.editor.tab_bar.configure(fg_color="transparent", border_width=0)
+        self.editor.text.configure(fg_color=G_BG, corner_radius=10, border_width=0)
+
+        # Update title when repo changes
+        orig_open_repo = self.explorer.open_repo
+        def new_open_repo(repo, path=""):
+            self.repo_title.configure(text=repo if repo else "No Repository")
+            orig_open_repo(repo, path)
+        self.explorer.open_repo = new_open_repo
+
+        # 1. Top Action Toolbar
+        self.toolbar = ctk.CTkFrame(self, fg_color="transparent", height=50)
+        self.toolbar.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        self.toolbar.grid_columnconfigure(4, weight=1) # Spacer between left/right buttons
+
+        # Action Buttons Style
+        btn_config = {
+            "fg_color": G_PANEL, 
+            "hover_color": G_BORDER, 
+            "corner_radius": 15, 
+            "height": 35,
+            "font": ("Inter", 12)
+        }
+
+        self.btn_refresh = ctk.CTkButton(self.toolbar, text="Refresh", command=self.explorer.refresh, **btn_config)
+        self.btn_refresh.pack(side="left", padx=(0, 10))
+
+        # Helper to create styled buttons
+        def create_btn(text, cmd, color=None):
+            cfg = btn_config.copy()
+            if color: cfg["fg_color"] = color
+            btn = ctk.CTkButton(self.toolbar, text=text, command=cmd, **cfg)
+            btn.pack(side="left", padx=(0, 10))
+            return btn
 
         def do_mkdir():
             repo = self.explorer.repo
-            if not repo:
-                return
+            if not repo: return
             name = ctk.CTkInputDialog(text="Folder name:", title="New folder").get_input()
-            if not name:
-                return
+            if not name: return
             rel = "/".join([p for p in [self.explorer.path, name] if p])
             backend.mkdir("/".join([self.explorer.repo, rel]).strip("/"))
             self.explorer.refresh()
 
         def do_put():
             filepath = filedialog.askopenfilename()
-            if not filepath:
-                return
-
+            if not filepath: return
             repo = self.explorer.repo
             if not repo:
                 messagebox.showwarning("Upload", "No repository selected.")
                 return
-
             remote_path = "/".join([p for p in [self.explorer.path, os.path.basename(filepath)] if p])
-            
             try:
                 response = backend.upload_file(repo, remote_path, filepath)
-                if response.startswith("200"):
-                    messagebox.showinfo("Upload", "File uploaded successfully.")
-                elif "413" in response:
-                    messagebox.showerror("Upload failed", "File is too large.")
-                else:
-                    messagebox.showerror("Upload failed", response)
-            except Exception as e:
-                messagebox.showerror("Upload failed", str(e))
-            
+                if response.startswith("200"): messagebox.showinfo("Upload", "Success")
+                else: messagebox.showerror("Error", response)
+            except Exception as e: messagebox.showerror("Error", str(e))
             self.explorer.refresh()
 
         def do_getdir():
-            backend.get_dir(self.explorer.path)
+            if self.explorer.repo: backend.get_dir(self.explorer.path)
 
-        ctk.CTkButton(bar, text="New Folder", fg_color=G_BG, hover_color="#0f172a", command=do_mkdir)	.pack(side="left", padx=6, pady=6)
-        ctk.CTkButton(bar, text="Upload File", fg_color=G_BG, hover_color="#0f172a", command=do_put)	.pack(side="left", padx=6, pady=6)
-        ctk.CTkButton(bar, text="Download Dir", fg_color=G_BG, hover_color="#0f172a", command=do_getdir)	.pack(side="left", padx=6, pady=6)
-        ctk.CTkButton(bar, text="Save (Ctrl+S)", fg_color=G_ACCENT, hover_color="#1f6feb",
-                      command=self.editor.save_active).pack(side="right", padx=6, pady=6)
+        create_btn("New Folder", do_mkdir)
+        create_btn("Upload File", do_put)
+        create_btn("Download Dir", do_getdir)
 
-        Divider(self).pack(fill="x")
+        # Right side save button
+        self.btn_save = ctk.CTkButton(
+            self.toolbar, 
+            text="Save (Ctrl+S)", 
+            command=self.editor.save_active,
+            fg_color=G_ACCENT, 
+            hover_color="#1f6feb",
+            corner_radius=15,
+            height=35,
+            font=("Inter", 12, "bold")
+        )
+        self.btn_save.pack(side="right")
 
     def _open_in_editor(self, path: str, version: str = None):
         self.editor.open_file(path, version)
+
+
 
 class AccountView(ctk.CTkFrame):
     def __init__(self, master, backend: SocketBackend):
@@ -1074,38 +1160,51 @@ class AccountView(ctk.CTkFrame):
 
         # --- Middle and Right Columns ---
         right_panel = ctk.CTkFrame(self, fg_color="transparent")
-        right_panel.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=(0, 8), pady=4)
+        right_panel.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=(0, 20), pady=4)
         right_panel.grid_columnconfigure(0, weight=1)
 
         # Settings Frame
-        settings_frame = ctk.CTkFrame(right_panel, fg_color=G_PANEL, border_color=G_BORDER, border_width=1)
+        settings_frame = ctk.CTkFrame(right_panel, fg_color=G_PANEL, border_color=G_BORDER, border_width=1, corner_radius=12)
         settings_frame.grid(row=0, column=0, sticky="new", padx=4, pady=0)
         settings_frame.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(settings_frame, text="Account Actions", font=("Inter", 14, "bold")).grid(row=0, column=0, padx=12, pady=(12, 8), sticky="w")
+        ctk.CTkLabel(settings_frame, text="Account Actions", font=("Inter", 14, "bold"), text_color=G_TEXT).grid(row=0, column=0, padx=20, pady=(15, 10), sticky="w")
 
         # Create Repository Section
         create_repo_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        create_repo_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 8))
+        create_repo_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(5, 10))
         create_repo_frame.grid_columnconfigure(0, weight=1)
 
-        self.repo_name_entry = ctk.CTkEntry(create_repo_frame, placeholder_text="New repository name")
-        self.repo_name_entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.repo_name_entry = ctk.CTkEntry(
+            create_repo_frame, 
+            placeholder_text="New repository name",
+            fg_color=G_BG, border_color=G_BORDER, text_color=G_TEXT,
+            height=35
+        )
+        self.repo_name_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
 
-        self.create_repo_button = ctk.CTkButton(create_repo_frame, text="Create Repo", command=self.create_repository_action)
+        self.create_repo_button = ctk.CTkButton(
+            create_repo_frame, 
+            text="Create Repo", 
+            command=self.create_repository_action,
+            fg_color=G_ACCENT, hover_color="#1f6feb",
+            height=35
+        )
         self.create_repo_button.grid(row=0, column=1, sticky="e")
 
+        # Base button styling
+        action_btn_style = {"fg_color": "transparent", "hover_color": "#1f2937", "anchor": "w", "height": 40, "corner_radius": 8}
+        
         # Change Password
-        ctk.CTkButton(settings_frame, text="Change Password", anchor="w", fg_color="transparent",
-                      hover_color="#0f172a", command=self.change_password_action).grid(row=2, column=0, sticky="ew", padx=12, pady=4)
+        ctk.CTkButton(settings_frame, text="Change Password", command=self.change_password_action, text_color=G_TEXT, **action_btn_style).grid(row=2, column=0, sticky="ew", padx=20, pady=5)
         
         # Logout
-        ctk.CTkButton(settings_frame, text="Logout", anchor="w", fg_color="transparent",
-                      hover_color="#0f172a", command=self.logout_action).grid(row=3, column=0, sticky="ew", padx=12, pady=4)
+        ctk.CTkButton(settings_frame, text="Logout", command=self.logout_action, text_color=G_TEXT, **action_btn_style).grid(row=3, column=0, sticky="ew", padx=20, pady=5)
 
         # Delete Account (with warning color)
-        ctk.CTkButton(settings_frame, text="Delete Account", anchor="w", text_color="#f85149", fg_color="transparent",
-                      hover_color="#0f172a", command=self.delete_account_action).grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 12))
+        ctk.CTkButton(settings_frame, text="Delete Account", command=self.delete_account_action, text_color="#f85149", **action_btn_style).grid(row=4, column=0, sticky="ew", padx=20, pady=(5, 20))
+
+
 
 
     def create_repository_action(self):
@@ -1157,7 +1256,7 @@ class AccountView(ctk.CTkFrame):
         # Create a dialog to get old and new passwords
         dialog = ctk.CTkToplevel(self)
         dialog.title("Change Password")
-        dialog.geometry("350x250")
+        dialog.geometry("350x350")
         dialog.resizable(False, False)
         dialog.configure(fg_color=G_BG)
         dialog.transient(self.master)
@@ -1166,8 +1265,8 @@ class AccountView(ctk.CTkFrame):
         # Center the dialog
         dialog.update_idletasks()
         x = (dialog.winfo_screenwidth() // 2) - (350 // 2)
-        y = (dialog.winfo_screenheight() // 2) - (250 // 2)
-        dialog.geometry(f"350x250+{x}+{y}")
+        y = (dialog.winfo_screenheight() // 2) - (350 // 2)
+        dialog.geometry(f"350x350+{x}+{y}")
         
         # Old password
         ctk.CTkLabel(dialog, text="Old Password:", text_color=G_TEXT).pack(anchor="w", padx=20, pady=(20, 0))
@@ -1253,7 +1352,7 @@ class App(ctk.CTk):
         super().__init__()
         self.backend = backend or SocketBackend()
         self.title("FileNest")
-        self.geometry("1100x700")
+        self.geometry("1100x600")
         self.minsize(900, 560)
         self.iconbitmap("logo.ico")
         self.configure(fg_color=G_BG)
@@ -1267,7 +1366,7 @@ class App(ctk.CTk):
         self.grid_rowconfigure(2, weight=1)
 
         # Top bar
-        self.top = TopBar(self, self._on_search, self._login_dialog)
+        self.top = TopBar(self, self._on_search, lambda: self._show(self.view_account))
         self.top.grid(row=0, column=0, columnspan=2, sticky="ew")
         
         # Divider

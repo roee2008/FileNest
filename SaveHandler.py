@@ -100,7 +100,7 @@ class DiffCheck:
     
     
 class SaveHandler(BaseDBHandler):
-    def __init__(self, db_name="SaveDB.sqlite"):
+    def __init__(self, db_name="SaveDB.db"):
         super().__init__(db_name)
         self.create_tables()
 
