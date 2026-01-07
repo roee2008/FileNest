@@ -72,6 +72,11 @@ class DBHandler(BaseDBHandler):
         """Adds a user to the access list for a given file."""
         self._execute("INSERT INTO file_access (fileId, accessUser) VALUES (?, ?)", (file_id, username))
 
+    def delete_file(self, file_id):
+        """Deletes a file/repo from the database."""
+        self._execute("DELETE FROM file_access WHERE fileId = ?", (file_id,))
+        self._execute("DELETE FROM files WHERE id = ?", (file_id,))
+
     def has_access(self, username, file_name):
         """Checks if a user has access to a file."""
         # Check if the user owns the file OR if their username is in the access list for that file.

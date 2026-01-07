@@ -174,11 +174,20 @@ def handle_login(conn, state, context, **kwargs):
         send_response(conn, b"401 LOGIN FAILED: Invalid username format.\n", state.get("aes_key"), state.get("aes_iv"))
         return
     userDB = context['userDB']
+
+    # Check if user is already logged in
+    connected_users = context.get('connected_users')
+    if connected_users is not None and username in connected_users:
+        send_response(conn, b"403 LOGIN FAILED: User already logged in.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
     user_data = userDB.get_user(username)
 
     if user_data and password == user_data[1]:
         send_response(conn, b"200 LOGIN SUCCESS\n", state.get("aes_key"), state.get("aes_iv"))
         state['name'] = username
+        if connected_users is not None:
+            connected_users.add(username)
     else:
         send_response(conn, b"401 LOGIN FAILED: Invalid username or password.\n", state.get("aes_key"), state.get("aes_iv"))
 
@@ -670,6 +679,7 @@ def main():
 
     inputs = [server_socket]
     client_data = {} # Will store state and context for each client socket
+    connected_users = set() # Track currently logged in users
 
     print(f"[+] FTP-like server listening on {HOST}:{PORT}")
 
@@ -694,7 +704,8 @@ def main():
                         "context": {
                             "fileDB": DBHandler(),
                             "userDB": UserHandler(),
-                            "saveHandler": SaveHandler()
+                            "saveHandler": SaveHandler(),
+                            "connected_users": connected_users
                         },
                         "buffer": b""
                     }
@@ -773,6 +784,12 @@ def main():
                         print(f"[-] {addr} disconnected. Reason: {e}")
                         inputs.remove(s)
                         if s in client_data:
+                            # Remove from connected_users if logged in
+                            username = client_data[s]['state'].get('name')
+                            if username and username in connected_users:
+                                connected_users.remove(username)
+                                debug_print(f"Removed {username} from connected_users")
+
                             # Clean up client data
                             client_data[s]['context']['fileDB'].close()
                             client_data[s]['context']['userDB'].close()

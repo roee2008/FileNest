@@ -78,11 +78,36 @@ class SocketBackend:
     
     def encrypt_aes_key_with_rsa(self, aes_key: bytes, aes_iv: bytes) -> bytes:
         """Encrypt AES key and IV with RSA public key"""
-        with open("public_key.pem", "rb") as key_file:
-            public_key = serialization.load_pem_public_key(
-                key_file.read(),
-                backend=default_backend()
-            )
+        public_key_pem_str = os.environ.get("FILE_NET_PUBLIC_KEY")
+        
+        # Fallback: try to read from client_secrets.env if not in environment
+        if not public_key_pem_str:
+            try:
+                env_path = os.path.join(os.path.dirname(__file__), "client_secrets.env")
+                if os.path.exists(env_path):
+                    with open(env_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if line.strip().startswith("FILE_NET_PUBLIC_KEY="):
+                                # Extract value and handle potential quotes
+                                value = line.split("=", 1)[1].strip()
+                                if (value.startswith('"') and value.endswith('"')) or \
+                                   (value.startswith("'") and value.endswith("'")):
+                                    value = value[1:-1]
+                                public_key_pem_str = value
+                                break
+            except Exception as e:
+                print(f"Warning: Failed to read client_secrets.env: {e}")
+
+        if not public_key_pem_str:
+            raise ValueError("Environment variable FILE_NET_PUBLIC_KEY is not set and client_secrets.env not found/valid")
+            
+        # Handle potential escaped newlines if set via single-line env var
+        public_key_pem = public_key_pem_str.replace("\\n", "\n").encode()
+
+        public_key = serialization.load_pem_public_key(
+            public_key_pem,
+            backend=default_backend()
+        )
         
         # Combine AES key and IV
         combined_data = aes_key + aes_iv
@@ -988,7 +1013,7 @@ class HomeView(ctk.CTkFrame):
             
         repos = self.backend.list_repos()
         for i, r in enumerate(repos):
-            card = RepoCard(self.scroll_container, r, "Remote Repository", on_open=lambda name=r: self.on_open_repo(name))
+            card = RepoCard(self.scroll_container, r, on_open=lambda name=r: self.on_open_repo(name))
             card.grid(row=i//3, column=i%3, sticky="ew", padx=10, pady=10)
 
 
@@ -1006,8 +1031,8 @@ class ExplorerView(ctk.CTkFrame):
         # 2. Split View (Explorer + Editor)
         self.split = ctk.CTkFrame(self, fg_color="transparent")
         self.split.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
-        self.split.grid_columnconfigure(0, weight=1, uniform="group1")
-        self.split.grid_columnconfigure(1, weight=2, uniform="group1")
+        self.split.grid_columnconfigure(0, weight=2, uniform="group1")
+        self.split.grid_columnconfigure(1, weight=3, uniform="group1")
         self.split.grid_rowconfigure(0, weight=1)
         
         # Explorer Container
@@ -1366,7 +1391,7 @@ class App(ctk.CTk):
         self.grid_rowconfigure(2, weight=1)
 
         # Top bar
-        self.top = TopBar(self, self._on_search, lambda: self._show(self.view_account))
+        self.top = TopBar(self, self._on_search, lambda: self._on_nav("Account"))
         self.top.grid(row=0, column=0, columnspan=2, sticky="ew")
         
         # Divider

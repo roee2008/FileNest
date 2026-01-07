@@ -1,0 +1,16 @@
+:loop
+start cmd /k
+goto loop
+--- FNSepV1 ---
+--- old_version
+
++++ new_version
+
+@@ -1,3 +1,4 @@
+
+ :loop
+ start cmd /k
+-goto loop
++goto loop 
++dsdsdrrrr
+--- FNSepV2 ---
