@@ -3,6 +3,7 @@ import os
 import select
 import re
 import struct
+from groq import Groq
 from DBHandler import DBHandler
 from UserHandler import UserHandler
 from SaveHandler import SaveHandler, DiffCheck
@@ -16,7 +17,7 @@ PORT = 2122
 BASE_DIR = "ftp_root"
 DEBUG = True
 MAX_FILE_SIZE = 2 * 1024 * 1024 # 2MB
-
+GROQ_API_KEY = "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"
 os.makedirs(BASE_DIR, exist_ok=True)
 
 def debug_print(message):
@@ -492,6 +493,68 @@ def handle_createrepo(conn, state, context, **kwargs):
     except Exception as e:
         send_response(conn, f"500 Server error: {e}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
 
+def handle_aisummary(conn, state, context, **kwargs):
+    """Handles AI summary request for a file."""
+    fileDB = context['fileDB']
+    save_handler = context['saveHandler']
+    username = state.get('name')
+    arg = kwargs.get('arg')
+
+    if not username:
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    if not arg:
+        send_response(conn, b"400 Bad Request: Missing file path. Usage: AISUMMARY <file_path>\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    if not have_access(username, arg, fileDB):
+        send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    # Get file content
+    latest_version = save_handler.get_latest_version(arg)
+    if latest_version == 0:
+        send_response(conn, b"404 File not found.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    content = save_handler.get_file_at_version(arg, latest_version)
+    if content is None:
+        send_response(conn, b"500 Could not read file.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    try:
+        # Decode content for AI processing
+        text_content = content.decode('utf-8', errors='ignore')
+        
+        # Limit content size for API
+        max_chars = 10000
+        if len(text_content) > max_chars:
+            text_content = text_content[:max_chars] + "\n... (truncated)"
+
+        # Call Groq API
+        client = Groq(api_key=GROQ_API_KEY)
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that summarizes file contents. Provide a clear, concise summary of the given file content. Focus on the main purpose, key components, and important details."
+                },
+                {
+                    "role": "user",
+                    "content": f"Please summarize this file:\n\n{text_content} Return only the summary. Do not add any additional text. And return it in hebrew. if the file is encrypted, return only 'הקובץ מוצפן'."
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            max_tokens=500
+        )
+        
+        summary = chat_completion.choices[0].message.content
+        send_response(conn, b"200 OK\n" + summary.encode('utf-8'), state.get("aes_key"), state.get("aes_iv"))
+    except Exception as e:
+        debug_print(f"AI Summary error: {e}")
+        send_response(conn, f"500 AI Summary failed: {str(e)}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
+
 def handle_quit(conn, state, context, **kwargs):
     """Handles disconnection."""
     send_response(conn, b"221 Goodbye!\n", state.get("aes_key"), state.get("aes_iv"))
@@ -631,6 +694,12 @@ command_handlers = {
         "args": [],
         "separator": None,
         "description": "Deletes the current user account."
+    },
+    "AISUMMARY": {
+        "handler": handle_aisummary,
+        "args": ["arg"],
+        "separator": None,
+        "description": "Gets AI summary of a file. Usage: AISUMMARY <file_path>"
     },
     "QUIT": {
         "handler": handle_quit,

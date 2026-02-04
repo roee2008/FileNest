@@ -491,6 +491,15 @@ class SocketBackend:
         response = self._recv_all()
         return response.startswith("200")
 
+    def get_ai_summary(self, repo: str, path: str) -> str:
+        """Get AI-generated summary of a file."""
+        full_path = os.path.join(repo, path).replace("\\", "/")
+        self._send(f"AISUMMARY {full_path}")
+        response = self._recv_all()
+        if response.startswith("200 OK"):
+            return response.split("\n", 1)[1] if "\n" in response else ""
+        return f"Error: {response}"
+
 # ---------- Utility ----------
 class Divider(ctk.CTkFrame):
     def __init__(self, master, height=1, fg=G_BORDER, **kw):
@@ -635,6 +644,70 @@ class LoginDialog(ctk.CTkToplevel):
     def get_result(self) -> bool:
         """Return True if login was successful, False otherwise."""
         return self.result
+
+# ---------- AI Summary Dialog ----------
+class AISummaryDialog(ctk.CTkToplevel):
+    def __init__(self, parent, summary: str = "", loading: bool = False):
+        super().__init__(parent)
+        self.title("AI Summary")
+        self.geometry("500x400")
+        self.resizable(True, True)
+        self.configure(fg_color=G_BG)
+        
+        try:
+            self.iconbitmap("logo.ico")
+        except Exception:
+            pass
+        
+        # Center the dialog
+        self.transient(parent)
+        self.grab_set()
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - (250)
+        y = (self.winfo_screenheight() // 2) - (200)
+        self.geometry(f"500x400+{x}+{y}")
+        
+        # Header
+        header = ctk.CTkLabel(self, text="✨ AI File Summary", font=("Inter", 18, "bold"), text_color=G_TEXT)
+        header.pack(pady=(20, 10))
+        
+        # Content area
+        self.content_frame = ctk.CTkFrame(self, fg_color=G_PANEL, corner_radius=12)
+        self.content_frame.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        
+        self.text = ctk.CTkTextbox(
+            self.content_frame, 
+            fg_color="transparent", 
+            text_color=G_TEXT,
+            font=("Inter", 13),
+            wrap="word"
+        )
+        self.text.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        if loading:
+            self.text.insert("0.0", "⏳ Generating summary...")
+            self.text.configure(state="disabled")
+        else:
+            self.text.insert("0.0", summary)
+            self.text.configure(state="disabled")
+        
+        # Close button
+        close_btn = ctk.CTkButton(
+            self,
+            text="Close",
+            fg_color=G_ACCENT,
+            hover_color="#1f6feb",
+            command=self.destroy
+        )
+        close_btn.pack(pady=(0, 20))
+        
+        self.bind("<Escape>", lambda e: self.destroy())
+    
+    def update_summary(self, summary: str):
+        self.text.configure(state="normal")
+        self.text.delete("0.0", "end")
+        self.text.insert("0.0", summary)
+        self.text.configure(state="disabled")
 
 # ---------- Top Bar ----------
 class TopBar(ctk.CTkFrame):
@@ -937,9 +1010,25 @@ class Editor(ctk.CTkFrame):
                                    text_color=G_TEXT, font=("JetBrains Mono", 12))
         self.text.pack(fill="both", expand=True, padx=8, pady=(8, 0))
 
-        # Status bar
-        self.status = ctk.CTkLabel(self, text="Ready", text_color=G_SUBTLE)
-        self.status.pack(anchor="w", padx=10, pady=6)
+        # Status bar with AI Summary button
+        self.status_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.status_frame.pack(fill="x", padx=10, pady=6)
+        
+        self.status = ctk.CTkLabel(self.status_frame, text="Ready", text_color=G_SUBTLE)
+        self.status.pack(side="left")
+        
+        self.ai_summary_btn = ctk.CTkButton(
+            self.status_frame,
+            text="✨ AI Summary",
+            fg_color=G_ACCENT_2,
+            hover_color="#059669",
+            width=100,
+            height=28,
+            corner_radius=8,
+            font=("Inter", 11),
+            command=self._request_ai_summary
+        )
+        self.ai_summary_btn.pack(side="right")
 
         # Bindings
         self.text.bind("<KeyRelease>", self._on_changed)
@@ -988,6 +1077,28 @@ class Editor(ctk.CTkFrame):
             self.status.configure(text=f"Saved {self.active_path} ✓")
         else:
             self.status.configure(text=f"Failed to save {self.active_path}")
+
+    def _request_ai_summary(self):
+        repo = self.repo_getter()
+        if not repo:
+            messagebox.showwarning("AI Summary", "No repository selected")
+            return
+        if not self.active_path:
+            messagebox.showwarning("AI Summary", "No file is open")
+            return
+        
+        # Show loading dialog
+        dialog = AISummaryDialog(self.master, loading=True)
+        
+        def fetch_summary():
+            try:
+                summary = self.backend.get_ai_summary(repo, self.active_path)
+                self.after(0, lambda: dialog.update_summary(summary))
+            except Exception as e:
+                self.after(0, lambda: dialog.update_summary(f"Error: {str(e)}"))
+        
+        # Run in background thread
+        threading.Thread(target=fetch_summary, daemon=True).start()
 
 # ---------- Main Views ----------
 class HomeView(ctk.CTkFrame):
