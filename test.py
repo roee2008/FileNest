@@ -814,16 +814,12 @@ class SideBar(ctk.CTkFrame):
 class RepoCard(ctk.CTkFrame):
     def __init__(self, master, name: str, desc: str = None, on_open: t.Callable[[], None] = None):
         super().__init__(master, fg_color=G_PANEL, corner_radius=12, border_width=1, border_color=G_BORDER)
-        self.grid_columnconfigure(1, weight=1)
-        icon = ctk.CTkLabel(self, text="\uf1c9", font=("Segoe UI Symbol", 20), text_color=G_SUBTLE)
-        icon.grid(row=0, column=0, padx=12, pady=12, sticky="n")
+        self.grid_columnconfigure(0, weight=1)
         title = ctk.CTkLabel(self, text=name, font=("Inter", 14, "bold"))
-        title.grid(row=0, column=1, sticky="w", pady=(12, 0))
-        subtitle = ctk.CTkLabel(self, text=desc or "No description", text_color=G_SUBTLE)
-        subtitle.grid(row=1, column=1, sticky="w", pady=(2, 12))
+        title.grid(row=0, column=0, sticky="w", padx=12, pady=12)
         open_btn = ctk.CTkButton(self, text="Open", fg_color=G_ACCENT, hover_color="#1f6feb",
                                  command=on_open)
-        open_btn.grid(row=0, column=2, rowspan=2, padx=12, pady=12)
+        open_btn.grid(row=0, column=1, padx=12, pady=12)
 
 # ---------- Explorer (File Tree) ----------
 class Explorer(ctk.CTkFrame):
