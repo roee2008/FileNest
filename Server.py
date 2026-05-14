@@ -17,7 +17,7 @@ PORT = 2122
 BASE_DIR = "ftp_root"
 DEBUG = True
 MAX_FILE_SIZE = 2 * 1024 * 1024 # 2MB
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "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"
 os.makedirs(BASE_DIR, exist_ok=True)
 
 def debug_print(message):
