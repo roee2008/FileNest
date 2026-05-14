@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 
-HOST = '127.0.0.1'
+HOST = '0.0.0.0'
 PORT = 2122
 BASE_DIR = "ftp_root"
 DEBUG = True
