@@ -235,37 +235,74 @@ class SaveHandler(BaseDBHandler):
     def list_virtual_directory(self, directory_path):
         """
         Simulates a directory listing based on fileLoc paths in the database.
-        
+        Each entry is prefixed with 'F:' for files and 'D:' for directories,
+        so the client can distinguish them without relying on file extensions.
+
         Args:
             directory_path (str): The virtual path to list, e.g., "repo1/folder".
 
         Returns:
-            list: A list of unique file and directory names inside the given path.
+            list: Strings of the form 'F:filename' or 'D:dirname'.
         """
-        # Normalize the path to ensure it's treated as a directory prefix
         if directory_path and not directory_path.endswith('/'):
             directory_path += '/'
 
-        # Fetch all file locations from the database
         all_files = self._execute("SELECT fileLoc FROM Saves").fetchall()
-        
-        children = set()
-        for (file_loc,) in all_files:
-            # Check if the file is inside the requested directory
+        file_locs = {row[0] for row in all_files}
+
+        direct_files: set = set()  # names that are immediate file children
+        sub_dirs: set    = set()   # names that are subdirectory prefixes
+
+        for file_loc in file_locs:
             if file_loc.startswith(directory_path):
-                # Get the part of the path relative to the directory_path
                 relative_path = file_loc[len(directory_path):]
-                # The first component of the relative path is the child
-                child_name = relative_path.split('/', 1)[0]
-                children.add(child_name)
-        
-        return list(children)
+                if not relative_path:
+                    continue  # skip exact match with the directory itself
+                slash_pos = relative_path.find('/')
+                if slash_pos == -1:
+                    direct_files.add(relative_path)      # leaf node → file
+                else:
+                    sub_dirs.add(relative_path[:slash_pos])  # has children → dir
+
+        result = []
+        for name in direct_files:
+            # If a name is also a dir prefix, treat it as a directory
+            result.append(f"D:{name}" if name in sub_dirs else f"F:{name}")
+        for name in sub_dirs:
+            if name not in direct_files:
+                result.append(f"D:{name}")
+
+        return result
+
     def search_files_by_name(self, file_name_part):
         """Searches for files in the database where the name contains a substring."""
         query = "SELECT fileLoc FROM Saves WHERE fileLoc LIKE ?"
         params = (f'%{file_name_part}%',)
         results = self._execute(query, params).fetchall()
         return [row[0] for row in results]
+
+    def delete_file(self, file_loc):
+        """Deletes a file's version history from the database and disk."""
+        file_id = hashlib.sha256(file_loc.encode()).hexdigest()
+        self._execute("DELETE FROM Saves WHERE id = ?", (file_id,))
+        self.conn.commit()
+        history_path = os.path.join("Abyss", file_id)
+        if os.path.exists(history_path):
+            os.remove(history_path)
+
+    def delete_directory(self, dir_loc):
+        """Deletes all files under a virtual directory (prefix match)."""
+        dir_prefix = dir_loc.rstrip('/') + '/'
+        rows = self._execute(
+            "SELECT id, fileLoc FROM Saves WHERE fileLoc = ? OR fileLoc LIKE ?",
+            (dir_loc, dir_prefix + '%')
+        ).fetchall()
+        for file_id, _ in rows:
+            self._execute("DELETE FROM Saves WHERE id = ?", (file_id,))
+            history_path = os.path.join("Abyss", file_id)
+            if os.path.exists(history_path):
+                os.remove(history_path)
+        self.conn.commit()
 
     def get_latest_version(self, file_loc):
         """Gets the latest version number for a given file location."""

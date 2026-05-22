@@ -610,6 +610,79 @@ def handle_deleteaccount(conn, state, context, **kwargs):
     except Exception as e:
         send_response(conn, f"500 Failed to delete account: {e}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
 
+def handle_deletefile(conn, state, context, **kwargs):
+    """Handles deleting a file. Only the repo owner may do this."""
+    fileDB = context['fileDB']
+    save_handler = context['saveHandler']
+    username = state.get('name')
+    arg = kwargs.get('arg')
+
+    if not username:
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    if not arg:
+        send_response(conn, b"400 Bad Request: Missing file path. Usage: DELETEFILE <file_path>\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    # Extract repo name (first path component)
+    repo_name = arg.replace("\\", "/").strip("/").split('/')[0]
+
+    if not fileDB.is_owner(username, repo_name):
+        send_response(conn, b"403 Only the repository owner can delete files.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    try:
+        save_handler.delete_file(arg)
+        send_response(conn, b"200 File deleted successfully.\n", state.get("aes_key"), state.get("aes_iv"))
+    except Exception as e:
+        send_response(conn, f"500 Failed to delete file: {e}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
+
+
+def handle_isowner(conn, state, context, **kwargs):
+    """Returns 200 if the logged-in user owns the given repository, 403 otherwise."""
+    fileDB = context['fileDB']
+    username = state.get('name')
+    repo_name = kwargs.get('repo_name')
+
+    if not username:
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    if fileDB.is_owner(username, repo_name):
+        send_response(conn, b"200 YES\n", state.get("aes_key"), state.get("aes_iv"))
+    else:
+        send_response(conn, b"403 NO\n", state.get("aes_key"), state.get("aes_iv"))
+
+
+def handle_deletedir(conn, state, context, **kwargs):
+    """Handles deleting a directory and all its contents. Owner only."""
+    fileDB = context['fileDB']
+    save_handler = context['saveHandler']
+    username = state.get('name')
+    arg = kwargs.get('arg')
+
+    if not username:
+        send_response(conn, b"403 You must be logged in to perform this action.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    if not arg:
+        send_response(conn, b"400 Bad Request: Missing path. Usage: DELETEDIR <dir_path>\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    repo_name = arg.replace("\\", "/").strip("/").split('/')[0]
+
+    if not fileDB.is_owner(username, repo_name):
+        send_response(conn, b"403 Only the repository owner can delete directories.\n", state.get("aes_key"), state.get("aes_iv"))
+        return
+
+    try:
+        save_handler.delete_directory(arg)
+        send_response(conn, b"200 Directory deleted successfully.\n", state.get("aes_key"), state.get("aes_iv"))
+    except Exception as e:
+        send_response(conn, f"500 Failed to delete directory: {e}\n".encode(), state.get("aes_key"), state.get("aes_iv"))
+
+
 command_handlers = {
     "LOGIN": {
         "handler": handle_login,
@@ -700,6 +773,24 @@ command_handlers = {
         "args": ["arg"],
         "separator": None,
         "description": "Gets AI summary of a file. Usage: AISUMMARY <file_path>"
+    },
+    "DELETEFILE": {
+        "handler": handle_deletefile,
+        "args": ["arg"],
+        "separator": None,
+        "description": "Deletes a file (owner only). Usage: DELETEFILE <file_path>"
+    },
+    "ISOWNER": {
+        "handler": handle_isowner,
+        "args": ["repo_name"],
+        "separator": None,
+        "description": "Check if logged-in user owns a repo. Usage: ISOWNER <repo_name>"
+    },
+    "DELETEDIR": {
+        "handler": handle_deletedir,
+        "args": ["arg"],
+        "separator": None,
+        "description": "Deletes a directory and all contents (owner only). Usage: DELETEDIR <dir_path>"
     },
     "QUIT": {
         "handler": handle_quit,

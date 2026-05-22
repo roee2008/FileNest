@@ -77,6 +77,14 @@ class DBHandler(BaseDBHandler):
         self._execute("DELETE FROM file_access WHERE fileId = ?", (file_id,))
         self._execute("DELETE FROM files WHERE id = ?", (file_id,))
 
+    def is_owner(self, username, repo_name):
+        """Returns True if username is the owner of the given repository."""
+        row = self._execute(
+            "SELECT 1 FROM files WHERE fileName = ? AND ownerHash = ?",
+            (repo_name, username)
+        ).fetchone()
+        return row is not None
+
     def has_access(self, username, file_name):
         """Checks if a user has access to a file."""
         # Check if the user owns the file OR if their username is in the access list for that file.

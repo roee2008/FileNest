@@ -279,30 +279,42 @@ class SocketBackend:
         raw = self._recv_all()
         if raw.startswith("200 OK"):
             items = []
-            for name in raw.split("\n")[1:]:
-                name = name.strip()
-                if not name:
+            for entry in raw.split("\n")[1:]:
+                entry = entry.strip()
+                if not entry:
                     continue
-                has_extension = bool(os.path.splitext(name)[1])
+                # Server tags each entry with 'F:' (file) or 'D:' (directory)
+                if entry.startswith("F:"):
+                    name   = entry[2:]
+                    is_dir = False
+                elif entry.startswith("D:"):
+                    name   = entry[2:]
+                    is_dir = True
+                else:
+                    # Fallback for legacy / root-level repo listings (no prefix)
+                    name   = entry
+                    is_dir = not bool(os.path.splitext(name)[1])
                 items.append({
-                    "name": name,
-                    "path": f"{path}/{name}".strip("/"),
-                    "is_dir": not has_extension
+                    "name":   name,
+                    "path":   f"{path}/{name}".strip("/"),
+                    "is_dir": is_dir
                 })
             items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
             return items
         return []
 
-    def get_file(self, repo: str, path: str, version: str = None) -> str:
+    def get_file(self, repo: str, path: str, version: str = None) -> Optional[str]:
+        """Returns file content as str, empty string for an empty file, or None on error."""
         full_path = os.path.join(repo, path).replace("\\", "/")
         if version:
             full_path = f"{full_path}  {version}"
         self._send(f"GET {full_path}")
         data = self._recv_all()
         if data.startswith("200 OK"):
-            # The content is everything after the first newline
-            return data.split("\n", 1)[1]
-        return ""
+            # split gives 1 element when content is empty (strip removed the trailing \n)
+            parts = data.split("\n", 1)
+            return parts[1] if len(parts) > 1 else ""
+        return None  # None signals a server-side error
 
     def save_file(self, repo: str, path: str, content: str) -> bool:
         full_path = os.path.join(repo, path).replace("\\", "/")
@@ -499,6 +511,19 @@ class SocketBackend:
         if response.startswith("200 OK"):
             return response.split("\n", 1)[1] if "\n" in response else ""
         return f"Error: {response}"
+
+    def delete_file(self, repo: str, path: str) -> bool:
+        """Delete a file from a repository (owner only). Returns True on success."""
+        full_path = os.path.join(repo, path).replace("\\", "/")
+        self._send(f"DELETEFILE {full_path}")
+        response = self._recv_all()
+        return response.startswith("200")
+
+    def is_repo_owner(self, repo: str) -> bool:
+        """Returns True if the logged-in user is the owner of the given repository."""
+        self._send(f"ISOWNER {repo}")
+        response = self._recv_all()
+        return response.startswith("200")
 
 # ---------- Utility ----------
 class Divider(ctk.CTkFrame):
@@ -829,6 +854,8 @@ class Explorer(ctk.CTkFrame):
         self.repo: str = None
         self.path = ""
         self.on_open_file = on_open_file
+        self.on_file_deleted: t.Optional[t.Callable[[str], None]] = None  # set by ExplorerView
+        self.is_owner: bool = False  # whether the current user owns the active repo
 
         # Breadcrumbs
         self.breadcrumb = ctk.CTkLabel(self, text="", text_color=G_SUBTLE)
@@ -863,9 +890,11 @@ class Explorer(ctk.CTkFrame):
         download_thread = threading.Thread(target=download_worker, daemon=True)
         download_thread.start()
 
-    def open_repo(self, repo: str,path: str = ""):
+    def open_repo(self, repo: str, path: str = ""):
         self.repo = repo
         self.path = path
+        # Cache ownership so every row doesn't need its own network call
+        self.is_owner = self.backend.is_repo_owner(repo) if repo else False
         self.refresh()
 
     def _container(self):
@@ -914,8 +943,8 @@ class Explorer(ctk.CTkFrame):
             rel_path = e["path"]
             is_dir = bool(e["is_dir"])
 
-            # Add a context menu or double-click to try opening as file if it's marked as directory
-            if "." not in name:
+            # Use server-provided is_dir flag for the icon
+            if is_dir:
                 label = "📁 " + name
             else:
                 label = "📄 " + name
@@ -965,6 +994,26 @@ class Explorer(ctk.CTkFrame):
                     
                     actions_frame = ctk.CTkFrame(row, fg_color="transparent")
                     actions_frame.pack(side="right", padx=(6, 0))
+
+                    # Delete button — only owners see this
+                    if self.is_owner:
+                        def do_delete(p=rel_path, fname=name):
+                            if messagebox.askyesno("Delete File", f"Delete '{fname}'? This cannot be undone."):
+                                ok = self.backend.delete_file(self.repo, p)
+                                if ok:
+                                    # Close the tab in the editor if it's open
+                                    if self.on_file_deleted:
+                                        self.on_file_deleted(p)
+                                    self.refresh()
+                                else:
+                                    messagebox.showerror("Delete", f"Failed to delete '{fname}'.")
+                        del_btn = ctk.CTkButton(
+                            actions_frame, text="🗑", width=28, height=28,
+                            fg_color="#7f1d1d", hover_color="#991b1b",
+                            command=do_delete
+                        )
+                        del_btn.pack(side="left", padx=(0, 2))
+
                     # The download button's command now reads the version from the shared variable.
                     download_button = ctk.CTkButton(actions_frame, text="⬇", width=30, fg_color=G_ACCENT, hover_color="#1f6feb",
                                   command=lambda p=rel_path, f=name, isd=is_dir, var=selected_version_var: self._do_download(p, f, isd, var.get()))
@@ -1036,7 +1085,7 @@ class Editor(ctk.CTkFrame):
             return
         try:
             content = self.backend.get_file(repo, path, version)
-            if content == "":
+            if content is None:
                 messagebox.showwarning("Open", f"Cannot open: {path}")
                 return
             # Create tab if needed
@@ -1062,6 +1111,21 @@ class Editor(ctk.CTkFrame):
     def _on_changed(self, event=None): # Added event parameter to accept Tkinter event object
         if self.active_path:
             self.status.configure(text=f"Editing {self.active_path} – Unsaved changes…")
+
+    def close_tab(self, path: str):
+        """Close a tab by path. If it was the active tab, clear the editor."""
+        if path not in self.tabs:
+            return
+        self.tabs[path].destroy()
+        del self.tabs[path]
+        if self.active_path == path:
+            self.active_path = None
+            self.text.delete("0.0", "end")
+            self.status.configure(text="Ready")
+            # Activate the first remaining tab, if any
+            if self.tabs:
+                next_path = next(iter(self.tabs))
+                self._activate(next_path)
 
     def save_active(self):
         repo = self.repo_getter()
@@ -1179,6 +1243,9 @@ class ExplorerView(ctk.CTkFrame):
             orig_open_repo(repo, path)
         self.explorer.open_repo = new_open_repo
 
+        # Wire delete callback so the editor closes the deleted file's tab
+        self.explorer.on_file_deleted = self.editor.close_tab
+
         # 1. Top Action Toolbar
         self.toolbar = ctk.CTkFrame(self, fg_color="transparent", height=50)
         self.toolbar.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
@@ -1213,6 +1280,24 @@ class ExplorerView(ctk.CTkFrame):
             backend.mkdir("/".join([self.explorer.repo, rel]).strip("/"))
             self.explorer.refresh()
 
+        def do_new_file():
+            repo = self.explorer.repo
+            if not repo:
+                messagebox.showwarning("New File", "No repository selected.")
+                return
+            name = ctk.CTkInputDialog(text="File name (e.g. notes.txt):", title="New File").get_input()
+            if not name:
+                return
+            name = name.strip()
+            if not name:
+                return
+            remote_path = "/".join([p for p in [self.explorer.path, name] if p])
+            ok = backend.save_file(repo, remote_path, " ")
+            if ok:
+                self.explorer.refresh()
+            else:
+                messagebox.showerror("New File", f"Failed to create '{name}'.")
+
         def do_put():
             filepath = filedialog.askopenfilename()
             if not filepath: return
@@ -1232,6 +1317,7 @@ class ExplorerView(ctk.CTkFrame):
             if self.explorer.repo: backend.get_dir(self.explorer.path)
 
         create_btn("New Folder", do_mkdir)
+        create_btn("New File", do_new_file)
         create_btn("Upload File", do_put)
         create_btn("Download Dir", do_getdir)
 
@@ -1484,8 +1570,8 @@ class App(ctk.CTk):
         super().__init__()
         self.backend = backend or SocketBackend()
         self.title("FileNest")
-        self.geometry("1100x600")
-        self.minsize(900, 560)
+        self.geometry("1400x700")
+        self.minsize(1400, 700)
         self.iconbitmap("logo.ico")
         self.configure(fg_color=G_BG)
         dialog = LoginDialog(self, self._on_login, self._on_register)
