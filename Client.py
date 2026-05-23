@@ -1,4 +1,5 @@
 import os
+import time
 import hashlib
 import threading
 import typing as t
@@ -27,7 +28,7 @@ ctk.set_default_color_theme("blue")
 
 # ---------- Backend API (socket FTP-like) ----------
 class SocketBackend:
-    def __init__(self, host: str = "127.0.0.1", port: int = 2122, debug: bool = False):
+    def __init__(self, host: str = "127.0.0.1", port: int = 2122, debug: bool = True):
         self.host = host
         self.port = port
         self.password: str = ""
@@ -36,11 +37,16 @@ class SocketBackend:
         self.debug = debug
         self.aes_key: bytes = None
         self.aes_iv: bytes = None
+        self.has_shown_crash = False
         self.connect()
 
     def debug_print(self, message):
         if self.debug:
-            print(f"[DEBUG] {message}")
+            try:
+                print(f"[DEBUG] {message}")
+            except UnicodeEncodeError:
+                # If printing fails due to terminal encoding limitations, fall back to safe ASCII/replaced representation
+                print(f"[DEBUG] {message.encode('ascii', errors='replace').decode('ascii')}")
     
     def generate_aes_key(self):
         """Generate a random AES key and IV"""
@@ -147,6 +153,7 @@ class SocketBackend:
         return decrypted
 
     def connect(self):
+        self.has_shown_crash = False
         if self.sock:
             try:
                 self.sock.close()
@@ -166,6 +173,9 @@ class SocketBackend:
             # Send encrypted AES key
             self.sock.sendall(encrypted_aes_data)
             self.debug_print("Sent encrypted AES key to server")
+            
+            # Start background connection monitor
+            self._start_connection_monitor()
             
         except Exception as e:
             self.debug_print(f"Connection error: {e}")
@@ -205,17 +215,24 @@ class SocketBackend:
         return self.password != None
 
     def _send(self, text: str):
-        assert self.sock, "Not connected"
+        if not self.sock:
+            self._handle_server_disconnect()
+            return
         self.debug_print(f"Sent: {text}")
-        if self.aes_key and self.aes_iv:
-            # Use AES encryption
-            encrypted_data = self.encrypt_with_aes(text.encode() + b"\n")
-            # Prefix with 4-byte length
-            self.sock.sendall(struct.pack('>I', len(encrypted_data)))
-            self.sock.sendall(encrypted_data)
-        else:
-            # Fallback to plain text (shouldn't happen after key exchange)
-            self.sock.sendall(text.encode() + b"\n")
+        try:
+            if self.aes_key and self.aes_iv:
+                # Use AES encryption
+                encrypted_data = self.encrypt_with_aes(text.encode() + b"\n")
+                # Prefix with 4-byte length
+                self.sock.sendall(struct.pack('>I', len(encrypted_data)))
+                self.sock.sendall(encrypted_data)
+            else:
+                # Fallback to plain text (shouldn't happen after key exchange)
+                self.sock.sendall(text.encode() + b"\n")
+        except (socket.error, OSError) as e:
+            self.debug_print(f"Socket error in _send: {e}")
+            self._handle_server_disconnect()
+
     def _recv_all_bytes(self) -> bytes:
         # Read message length
         length_data = self.sock.recv(4)
@@ -236,6 +253,7 @@ class SocketBackend:
     def _recv_all(self) -> str:
         data = self._recv_all_bytes()
         if not data:
+            self._handle_server_disconnect()
             return ""
 
         if self.aes_key and self.aes_iv:
@@ -250,8 +268,88 @@ class SocketBackend:
             # Fallback to plain text
             decoded_data = data.decode(errors="ignore").strip()
         
+        if "500 SERVER CRASHED" in decoded_data:
+            self._handle_server_crash(decoded_data)
+            
         self.debug_print(f"Received: {decoded_data}")
         return decoded_data
+    def _handle_server_disconnect(self):
+        if not self.has_shown_crash:
+            self.has_shown_crash = True
+            msg = (
+                "=====================================\n"
+                "SERVER CONNECTION LOST\n"
+                "=====================================\n"
+                "The server has encountered an unexpected crash or has shut down.\n"
+                "Please try logging in again later.\n"
+                "====================================="
+            )
+            try:
+                messagebox.showerror("Server Crashed", msg)
+            except Exception as e:
+                print(f"Error displaying messagebox: {e}")
+            finally:
+                os._exit(0)
+
+    def _handle_server_crash(self, decoded_data: str):
+        if not self.has_shown_crash:
+            self.has_shown_crash = True
+            crash_content = decoded_data
+            if "500 SERVER CRASHED\n" in crash_content:
+                crash_content = crash_content.split("500 SERVER CRASHED\n", 1)[1]
+            try:
+                messagebox.showerror("Server Crashed", crash_content)
+            except Exception as e:
+                print(f"Error displaying messagebox: {e}")
+            finally:
+                os._exit(0)
+
+    def _start_connection_monitor(self):
+        def monitor_worker():
+            import select
+            while self.sock and not self.has_shown_crash:
+                try:
+                    # Non-blocking check if socket has data or is closed
+                    readable, _, _ = select.select([self.sock], [], [], 0.5)
+                    if readable:
+                        try:
+                            # Peek at the data without consuming it so main thread can read it
+                            peek_data = self.sock.recv(4096, socket.MSG_PEEK)
+                            if not peek_data:
+                                # Connection was lost/closed
+                                self._handle_server_disconnect()
+                                break
+                            
+                            # Check if the peeked data contains "500 SERVER CRASHED"
+                            if self.aes_key and self.aes_iv:
+                                try:
+                                    if len(peek_data) >= 4:
+                                        msg_len = struct.unpack('>I', peek_data[:4])[0]
+                                        if len(peek_data) >= 4 + msg_len:
+                                            encrypted_message = peek_data[4:4 + msg_len]
+                                            decrypted = self.decrypt_with_aes(encrypted_message)
+                                            decoded = decrypted.decode(errors="ignore").strip()
+                                            if "500 SERVER CRASHED" in decoded:
+                                                self._handle_server_crash(decoded)
+                                                # Consume the crash message so it's not left in buffer
+                                                self.sock.recv(4 + msg_len)
+                                                break
+                                except Exception:
+                                    pass
+                            else:
+                                decoded = peek_data.decode(errors="ignore").strip()
+                                if "500 SERVER CRASHED" in decoded:
+                                    self._handle_server_crash(decoded)
+                                    self.sock.recv(len(peek_data))
+                                    break
+                        except (socket.error, OSError):
+                            self._handle_server_disconnect()
+                            break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+        threading.Thread(target=monitor_worker, daemon=True).start()
 
 
     # --- high-level API for your UI ---
@@ -377,62 +475,93 @@ class SocketBackend:
         response = self._recv_all()
         return response.startswith("201")
 
-    def get_dir(self,  path: str):
+    def get_dir(self,  path: str) -> bool:
         full_path = path.replace("\\", "/")
         self._send(f"GETDIR {full_path}")
         response = self._recv_all()
         if not response.startswith("200 OK"):
-            return
+            return False
 
         while True:
-            header = b""
-            while not header.endswith(b"\n"):
-                chunk = self.sock.recv(1)
-                if not chunk:
-                    return
-                header += chunk
-            header_s = header.decode().strip()
-            if header_s == "DONE":
+            enc_block = self._recv_all_bytes()
+            if not enc_block:
+                return False
+            try:
+                dec_block = self.decrypt_with_aes(enc_block)
+            except Exception as e:
+                self.debug_print(f"AES decryption failed in get_dir: {e}")
+                return False
+            
+            block_s = dec_block.decode(errors="ignore").strip()
+            if block_s == "DONE":
                 break
-            if header_s.startswith("404"):
-                print(header_s)
-                break
-            _, rel_path, size_str = header_s.split(" ", 2)
-            size = int(size_str)
+            if block_s.startswith("404") or block_s.startswith("403") or block_s.startswith("500"):
+                print(block_s)
+                return False
+            if block_s.startswith("INFO"):
+                continue
+            
+            try:
+                _, rel_path, size_str = block_s.split(" ", 2)
+            except ValueError:
+                continue
+            
+            # Receive the next block (which contains the file data!)
+            enc_content = self._recv_all_bytes()
+            if not enc_content:
+                return False
+            try:
+                file_content = self.decrypt_with_aes(enc_content)
+            except Exception as e:
+                self.debug_print(f"AES decryption of content failed in get_dir: {e}")
+                return False
+            
             os.makedirs(os.path.dirname(rel_path), exist_ok=True)
-            remaining = size
-            data = b""
-            while remaining > 0:
-                chunk = self.sock.recv(min(4096, remaining))
-                if not chunk:
-                    break
-                data += chunk
-                remaining -= len(chunk)
             with open(rel_path, "wb") as f:
-                f.write(data)
+                f.write(file_content)
+        return True
 
-    def get_dir_to(self, remote_path: str, dest_root: str):
+    def get_dir_to(self, remote_path: str, dest_root: str) -> bool:
         remote_path = remote_path.replace("\\", "/").strip("/")
         self._send(f"GETDIR {remote_path}")
         response = self._recv_all()
         if not response.startswith("200 OK"):
-            return
+            return False
 
         while True:
-            header = b""
-            while not header.endswith(b"\n"):
-                chunk = self.sock.recv(1)
-                if not chunk:
-                    return
-                header += chunk
-            header_s = header.decode().strip()
-            if header_s == "DONE":
+            enc_block = self._recv_all_bytes()
+            if not enc_block:
+                return False
+            try:
+                dec_block = self.decrypt_with_aes(enc_block)
+            except Exception as e:
+                self.debug_print(f"AES decryption failed in get_dir_to: {e}")
+                return False
+            
+            block_s = dec_block.decode(errors="ignore").strip()
+            if block_s == "DONE":
                 break
-            if header_s.startswith("404"):
-                print(header_s)
-                break
-            _, rel_path, size_str = header_s.split(" ", 2)
-            size = int(size_str)
+            if block_s.startswith("404") or block_s.startswith("403") or block_s.startswith("500"):
+                print(block_s)
+                return False
+            if block_s.startswith("INFO"):
+                continue
+            
+            try:
+                _, rel_path, size_str = block_s.split(" ", 2)
+            except ValueError:
+                continue
+            
+            # Receive the next block (which contains the file data!)
+            enc_content = self._recv_all_bytes()
+            if not enc_content:
+                return False
+            try:
+                file_content = self.decrypt_with_aes(enc_content)
+            except Exception as e:
+                self.debug_print(f"AES decryption of content failed in get_dir_to: {e}")
+                return False
+            
             rel_path = rel_path.replace("\\", "/")
             try:
                 rel_to = os.path.relpath(rel_path, remote_path).replace("\\", "/")
@@ -440,14 +569,9 @@ class SocketBackend:
                 rel_to = os.path.basename(rel_path)
             local_path = os.path.join(dest_root, rel_to)
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            remaining = size
             with open(local_path, "wb") as f:
-                while remaining > 0:
-                    chunk = self.sock.recv(min(4096, remaining))
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    remaining -= len(chunk)
+                f.write(file_content)
+        return True
 
     def quit(self):
         if not self.sock:
@@ -516,6 +640,13 @@ class SocketBackend:
         """Delete a file from a repository (owner only). Returns True on success."""
         full_path = os.path.join(repo, path).replace("\\", "/")
         self._send(f"DELETEFILE {full_path}")
+        response = self._recv_all()
+        return response.startswith("200")
+
+    def delete_dir(self, repo: str, path: str) -> bool:
+        """Delete a directory and all its contents (owner only). Returns True on success."""
+        full_path = os.path.join(repo, path).replace("\\", "/")
+        self._send(f"DELETEDIR {full_path}")
         response = self._recv_all()
         return response.startswith("200")
 
@@ -925,9 +1056,28 @@ class Explorer(ctk.CTkFrame):
         if self.path:
             ctk.CTkButton(container, text="..", fg_color="transparent", hover_color="#0f172a",
                           anchor="w", command=self._go_up).pack(fill="x", padx=6, pady=(6, 0))
-        if not entries: 
-            ctk.CTkLabel(container, text="(Empty)", text_color=G_SUBTLE).pack(pady=10)
-            return # Stop here if there are no entries
+        if not entries:
+            empty_row = ctk.CTkFrame(container, fg_color="transparent")
+            empty_row.pack(fill="x", padx=6, pady=10)
+            ctk.CTkLabel(empty_row, text="(Empty)", text_color=G_SUBTLE).pack(side="left")
+            # Owner can delete the current empty folder from within it
+            if self.is_owner and self.path:
+                folder_name = self.path.split('/')[-1]
+                def _delete_current_folder(p=self.path, fname=folder_name):
+                    if messagebox.askyesno("Delete Folder", f"Delete folder '{fname}'? This cannot be undone."):
+                        ok = self.backend.delete_dir(self.repo, p)
+                        if ok:
+                            if self.on_file_deleted:
+                                self.on_file_deleted(p)
+                            self._go_up()
+                        else:
+                            messagebox.showerror("Delete", f"Failed to delete '{fname}'.")
+                ctk.CTkButton(
+                    empty_row, text="\ud83d\uddd1 Delete Folder", width=120, height=28,
+                    fg_color="#7f1d1d", hover_color="#991b1b", font=("Inter", 11),
+                    command=_delete_current_folder
+                ).pack(side="right")
+            return  # Stop here if there are no entries
 
         for e in entries: # This loop will now only run if entries is not empty
             name = e["name"]
@@ -1314,7 +1464,26 @@ class ExplorerView(ctk.CTkFrame):
             self.explorer.refresh()
 
         def do_getdir():
-            if self.explorer.repo: backend.get_dir(self.explorer.path)
+            repo = self.explorer.repo
+            if not repo:
+                messagebox.showwarning("Download", "No repository selected.")
+                return
+            dest_dir = filedialog.askdirectory(title="Choose folder to save directory contents")
+            if not dest_dir:
+                return
+
+            def download_worker():
+                full_path = "/".join([repo, self.explorer.path]).strip("/")
+                try:
+                    ok = backend.get_dir_to(full_path, dest_dir)
+                    if ok:
+                        messagebox.showinfo("Download", f"Successfully downloaded directory contents to:\n{dest_dir}")
+                    else:
+                        messagebox.showerror("Error", f"Failed to download directory: {full_path}")
+                except Exception as e:
+                    messagebox.showerror("Error", f"An error occurred during download:\n{e}")
+
+            threading.Thread(target=download_worker, daemon=True).start()
 
         create_btn("New Folder", do_mkdir)
         create_btn("New File", do_new_file)

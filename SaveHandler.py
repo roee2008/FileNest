@@ -291,11 +291,11 @@ class SaveHandler(BaseDBHandler):
             os.remove(history_path)
 
     def delete_directory(self, dir_loc):
-        """Deletes all files under a virtual directory (prefix match)."""
+        """Deletes all files under a virtual directory (prefix match) and the directory marker itself."""
         dir_prefix = dir_loc.rstrip('/') + '/'
         rows = self._execute(
-            "SELECT id, fileLoc FROM Saves WHERE fileLoc = ? OR fileLoc LIKE ?",
-            (dir_loc, dir_prefix + '%')
+            "SELECT id, fileLoc FROM Saves WHERE fileLoc = ? OR fileLoc = ? OR fileLoc LIKE ?",
+            (dir_loc, dir_prefix, dir_prefix + '%')
         ).fetchall()
         for file_id, _ in rows:
             self._execute("DELETE FROM Saves WHERE id = ?", (file_id,))

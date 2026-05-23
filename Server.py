@@ -1,6 +1,7 @@
 import socket
 import os
 import select
+import time
 import re
 import struct
 from groq import Groq
@@ -120,19 +121,28 @@ def decrypt_with_aes(encrypted_data: bytes, aes_key: bytes, aes_iv: bytes) -> by
 
 def send_response(conn, message, aes_key=None, aes_iv=None):
     debug_print(f"Sent: {message.strip()[:50]}{'...' if len(message.strip()) > 50 else ''}")
-    if aes_key and aes_iv:
-        # Use AES encryption
-        if isinstance(message, bytes):
-            message_bytes = message
+    # Temporarily set to blocking mode to allow OS buffers to flush without BlockingIOError
+    conn.setblocking(True)
+    try:
+        if aes_key and aes_iv:
+            # Use AES encryption
+            if isinstance(message, bytes):
+                message_bytes = message
+            else:
+                message_bytes = message.encode()
+            encrypted_data = encrypt_with_aes(message_bytes, aes_key, aes_iv)
+            # Prefix with 4-byte length
+            conn.sendall(struct.pack('>I', len(encrypted_data)))
+            conn.sendall(encrypted_data)
         else:
-            message_bytes = message.encode()
-        encrypted_data = encrypt_with_aes(message_bytes, aes_key, aes_iv)
-        # Prefix with 4-byte length
-        conn.sendall(struct.pack('>I', len(encrypted_data)))
-        conn.sendall(encrypted_data)
-    else:
-        # Fallback to RSA encryption (for initial banner)
-        conn.sendall(encrypt_message(message))
+            # Fallback to RSA encryption (for initial banner)
+            conn.sendall(encrypt_message(message))
+    finally:
+        # Restore non-blocking state for select loop
+        try:
+            conn.setblocking(False)
+        except Exception:
+            pass
 
 def have_access(username, path, fileDB):
     """
@@ -432,8 +442,9 @@ def handle_mkdir(conn, state, context, **kwargs):
     if not have_access(username, arg, fileDB):
         send_response(conn, b"403 Access denied.\n", state.get("aes_key"), state.get("aes_iv"))
     else:
-        save_handler.save_file(arg, "".encode('utf-8'))
-        send_response(conn, b"201 Directory will be created upon file upload.\n", state.get("aes_key"), state.get("aes_iv"))
+        # Store with trailing slash so list_virtual_directory classifies it as a directory
+        save_handler.save_file(arg.rstrip('/') + "/", "".encode('utf-8'))
+        send_response(conn, b"201 Directory created.\n", state.get("aes_key"), state.get("aes_iv"))
 
 def handle_getrepos(conn, state, context, **kwargs):
     """Handles getting user's repositories."""
@@ -879,16 +890,26 @@ def main():
                             
                             if client_state.get("stage") == "key_exchange":
                                 try:
-                                    aes_key, aes_iv = decrypt_aes_key_with_rsa(data)
+                                    if len(data) < 256:
+                                        continue
+                                    rsa_ciphertext = data[:256]
+                                    remaining_data = data[256:]
+                                    
+                                    aes_key, aes_iv = decrypt_aes_key_with_rsa(rsa_ciphertext)
                                     client_state["aes_key"] = aes_key
                                     client_state["aes_iv"] = aes_iv
                                     client_state["stage"] = "command"
                                     debug_print(f"Successfully decrypted AES key from {client_info['addr']}")
+                                    
+                                    if remaining_data:
+                                        data = remaining_data
+                                    else:
+                                        continue
                                 except Exception as e:
                                     debug_print(f"Failed to decrypt AES key from {client_info['addr']}: {e}")
                                     raise ConnectionAbortedError("Key exchange failed")
                             
-                            elif client_state.get("stage") == "uploading":
+                            if client_state.get("stage") == "uploading":
                                 client_state['upload_buffer'] += data
                                 client_state['upload_size'] += len(data)
 
@@ -959,6 +980,31 @@ def main():
 
     except KeyboardInterrupt:
         print("\n[!] Server shutting down.")
+    except Exception as server_error:
+        print(f"\n[CRITICAL] Server crashed: {server_error}")
+        import traceback
+        traceback.print_exc()
+        
+        crash_msg = (
+            "======================================\n"
+            "SERVER CRITICAL CRASH ALERT:\n"
+            "The server has encountered an unexpected crash.\n"
+            "Please try to log in again later.\n"
+            "======================================"
+        )
+        # Notify all connected clients before terminating
+        for s in list(inputs):
+            if s is not server_socket:
+                try:
+                    info = client_data.get(s)
+                    if info:
+                        state = info.get("state", {})
+                        # Send 500 SERVER CRASHED + the crash message
+                        send_response(s, f"500 SERVER CRASHED\n{crash_msg}\n".encode('utf-8'), state.get("aes_key"), state.get("aes_iv"))
+                except:
+                    pass
+        time.sleep(0.3)
+        raise server_error
     finally:
         for s in inputs:
             if s in client_data:
