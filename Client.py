@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 import secrets
+#pip install customtkinter cryptography pywin32 groq
 
 # ---------- Color Theme (Midnight Slate) ----------
 G_BG       = "#0f172a"  # Slate 950
