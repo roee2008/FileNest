@@ -29,7 +29,7 @@ ctk.set_default_color_theme("blue")
 
 # ---------- Backend API (socket FTP-like) ----------
 class SocketBackend:
-    def __init__(self, host: str = "127.0.0.1", port: int = 2122, debug: bool = True):
+    def __init__(self, host: str = "127.0.0.1", port: int = 2122, debug: bool = False):
         self.host = host
         self.port = port
         self.password: str = ""

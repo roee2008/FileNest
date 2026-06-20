@@ -1,0 +1,162 @@
+<mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    
+    <mxCell id="start" value="App Start" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+      <mxGeometry x="40" y="120" width="80" height="80" as="geometry" />
+    </mxCell>
+
+    <mxCell id="login" value="Login Dialog&#xa;(דיאלוג כניסה)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontColor=#333333;strokeColor=#666666;" vertex="1" parent="1">
+      <mxGeometry x="180" y="130" width="120" height="60" as="geometry" />
+    </mxCell>
+
+    <mxCell id="main_group" value="Main App Context" style="swimlane;whiteSpace=wrap;html=1;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="160" y="240" width="500" height="340" as="geometry" />
+    </mxCell>
+
+    <mxCell id="home" value="Home Screen&#xa;(מסך בית)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="main_group">
+      <mxGeometry x="20" y="60" width="120" height="60" as="geometry" />
+    </mxCell>
+
+    <mxCell id="explorer" value="Explorer&#xa;(סייר מאגרים)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="main_group">
+      <mxGeometry x="190" y="60" width="120" height="60" as="geometry" />
+    </mxCell>
+
+    <mxCell id="account" value="Account Screen&#xa;(מסך חשבון)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="main_group">
+      <mxGeometry x="360" y="60" width="120" height="60" as="geometry" />
+    </mxCell>
+
+    <mxCell id="sidebar" value="Sidebar Navigation&#xa;(ניווט סרגל צד)" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontStyle=2" vertex="1" parent="main_group">
+      <mxGeometry x="185" y="150" width="130" height="40" as="geometry" />
+    </mxCell>
+
+    <mxCell id="ai_summary" value="AI Summary Dialog&#xa;(דיאלוג סיכום AI)" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+      <mxGeometry x="340" y="630" width="140" height="60" as="geometry" />
+    </mxCell>
+
+    <mxCell id="edge1" value="" style="endArrow=classic;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="start" target="login">
+      <mxGeometry width="50" height="50" relative="1" as="geometry" />
+    </mxCell>
+
+    <mxCell id="edge2" value="אימות מוצלח" style="endArrow=classic;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="login" target="home">
+      <mxGeometry x="-0.4" y="20" width="50" height="50" relative="1" as="geometry">
+        <mxPoint as="offset" />
+      </mxGeometry>
+    </mxCell>
+
+    <mxCell id="edge3" value="" style="endArrow=classic;startArrow=classic;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="main_group" source="home" target="explorer">
+      <mxGeometry width="50" height="50" relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="edge4" value="" style="endArrow=classic;startArrow=classic;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="main_group" source="explorer" target="account">
+      <mxGeometry width="50" height="50" relative="1" as="geometry" />
+    </mxCell>
+
+    <mxCell id="edge5" value="לחיצה על Open" style="endArrow=classic;html=1;curved=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="main_group" source="home" target="explorer">
+      <mxGeometry x="0.13" y="10" width="50" height="50" relative="1" as="geometry">
+        <mxPoint as="offset" />
+      </mxGeometry>
+    </mxCell>
+
+    <mxCell id="edge6" value="AI Summary" style="endArrow=classic;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="explorer" target="ai_summary">
+      <mxGeometry width="50" height="50" relative="1" as="geometry" />
+    </mxCell>
+
+    <mxCell id="edge7" value="יציאה/מחיקה" style="endArrow=classic;html=1;curved=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="account" target="login">
+      <mxGeometry x="-0.85" y="20" width="50" height="50" relative="1" as="geometry">
+        <mxPoint x="750" y="400" as="targetPoint" />
+        <Array as="points">
+          <mxPoint x="720" y="330" />
+          <mxPoint x="720" y="160" />
+        </Array>
+        <mxPoint as="offset" />
+      </mxGeometry>
+    </mxCell>
+
+  </root>
+</mxGraphModel>
+--- FNSepV1 ---
+--- old_version
+
++++ new_version
+
+@@ -1,77 +1,3 @@
+
+-<mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+-  <root>
+-    <mxCell id="0" />
+-    <mxCell id="1" parent="0" />
+-    
+-    <mxCell id="start" value="App Start" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+-      <mxGeometry x="40" y="120" width="80" height="80" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="login" value="Login Dialog&#xa;(דיאלוג כניסה)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;fontColor=#333333;strokeColor=#666666;" vertex="1" parent="1">
+-      <mxGeometry x="180" y="130" width="120" height="60" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="main_group" value="Main App Context" style="swimlane;whiteSpace=wrap;html=1;dashed=1;" vertex="1" parent="1">
+-      <mxGeometry x="160" y="240" width="500" height="340" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="home" value="Home Screen&#xa;(מסך בית)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="main_group">
+-      <mxGeometry x="20" y="60" width="120" height="60" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="explorer" value="Explorer&#xa;(סייר מאגרים)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="main_group">
+-      <mxGeometry x="190" y="60" width="120" height="60" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="account" value="Account Screen&#xa;(מסך חשבון)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="main_group">
+-      <mxGeometry x="360" y="60" width="120" height="60" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="sidebar" value="Sidebar Navigation&#xa;(ניווט סרגל צד)" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontStyle=2" vertex="1" parent="main_group">
+-      <mxGeometry x="185" y="150" width="130" height="40" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="ai_summary" value="AI Summary Dialog&#xa;(דיאלוג סיכום AI)" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+-      <mxGeometry x="340" y="630" width="140" height="60" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="edge1" value="" style="endArrow=classic;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="start" target="login">
+-      <mxGeometry width="50" height="50" relative="1" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="edge2" value="אימות מוצלח" style="endArrow=classic;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="login" target="home">
+-      <mxGeometry x="-0.4" y="20" width="50" height="50" relative="1" as="geometry">
+-        <mxPoint as="offset" />
+-      </mxGeometry>
+-    </mxCell>
+-
+-    <mxCell id="edge3" value="" style="endArrow=classic;startArrow=classic;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="main_group" source="home" target="explorer">
+-      <mxGeometry width="50" height="50" relative="1" as="geometry" />
+-    </mxCell>
+-    <mxCell id="edge4" value="" style="endArrow=classic;startArrow=classic;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="main_group" source="explorer" target="account">
+-      <mxGeometry width="50" height="50" relative="1" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="edge5" value="לחיצה על Open" style="endArrow=classic;html=1;curved=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="main_group" source="home" target="explorer">
+-      <mxGeometry x="0.13" y="10" width="50" height="50" relative="1" as="geometry">
+-        <mxPoint as="offset" />
+-      </mxGeometry>
+-    </mxCell>
+-
+-    <mxCell id="edge6" value="AI Summary" style="endArrow=classic;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="explorer" target="ai_summary">
+-      <mxGeometry width="50" height="50" relative="1" as="geometry" />
+-    </mxCell>
+-
+-    <mxCell id="edge7" value="יציאה/מחיקה" style="endArrow=classic;html=1;curved=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="account" target="login">
+-      <mxGeometry x="-0.85" y="20" width="50" height="50" relative="1" as="geometry">
+-        <mxPoint x="750" y="400" as="targetPoint" />
+-        <Array as="points">
+-          <mxPoint x="720" y="330" />
+-          <mxPoint x="720" y="160" />
+-        </Array>
+-        <mxPoint as="offset" />
+-      </mxGeometry>
+-    </mxCell>
+ 
+   </root>
+ </mxGraphModel>
+--- FNSepV2 ---

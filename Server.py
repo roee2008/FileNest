@@ -18,7 +18,7 @@ PORT = 2122
 BASE_DIR = "ftp_root"
 DEBUG = True
 MAX_FILE_SIZE = 2 * 1024 * 1024 # 2MB
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "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"
 os.makedirs(BASE_DIR, exist_ok=True)
 
 def debug_print(message):
@@ -535,13 +535,17 @@ def handle_aisummary(conn, state, context, **kwargs):
         return
 
     try:
-        # Decode content for AI processing
-        text_content = content.decode('utf-8', errors='ignore')
-        
-        # Limit content size for API
-        max_chars = 10000
-        if len(text_content) > max_chars:
-            text_content = text_content[:max_chars] + "\n... (truncated)"
+        # Check if the file is binary
+        if b'\x00' in content:
+            text_content = "[BINARY DATA - CONTENT NOT SHOWN]"
+        else:
+            # Decode content for AI processing
+            text_content = content.decode('utf-8', errors='ignore')
+            
+            # Limit content size for API
+            max_chars = 10000
+            if len(text_content) > max_chars:
+                text_content = text_content[:max_chars] + "\n... (truncated)"
 
         # Call Groq API
         client = Groq(api_key=GROQ_API_KEY)
@@ -553,7 +557,7 @@ def handle_aisummary(conn, state, context, **kwargs):
                 },
                 {
                     "role": "user",
-                    "content": f"Please summarize this file:\n\n{text_content} Return only the summary. Do not add any additional text. And return it in hebrew. if the file is encrypted, return only 'הקובץ מוצפן'."
+                    "content": f"Please summarize this file and try to identify what type of file it is (e.g. py, c, png, etc.).\n\nFile Name/Path: {arg}\nFile Content:\n{text_content}\n\nReturn only the summary. Mention the identified file type at the beginning of your summary. Do not add any additional text. And return it in hebrew. if the file is encrypted, return only 'הקובץ מוצפן'."
                 }
             ],
             model="llama-3.3-70b-versatile",
